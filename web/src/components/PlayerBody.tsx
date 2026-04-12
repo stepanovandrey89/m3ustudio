@@ -528,7 +528,7 @@ export function PlayerBody({
           isMobile
             ? 'flex flex-col gap-2 px-3 py-3'
             : 'flex items-center gap-x-4 px-4 py-4',
-          isFullscreen && 'absolute bottom-0 left-0 right-0 z-20 bg-gradient-to-t from-black/85 to-transparent py-6',
+          isFullscreen && 'absolute bottom-0 left-0 right-0 z-20 bg-gradient-to-t from-black/85 to-transparent py-6 pr-24',
           isFullscreen && !controlsVisible && 'pointer-events-none translate-y-1 opacity-0',
         )}>
           {/* Channel info — drag handle on desktop */}
