@@ -10,6 +10,7 @@ Vite in development and by this app in production (if web/dist exists).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import re
 from pathlib import Path
@@ -30,7 +31,6 @@ from server.proxy import proxy_stream
 from server.state import StateStore
 from server.state.defaults import DEFAULT_ORDERED_NAMES
 from server.transcode import TranscodeManager, run_cleanup_loop
-
 
 # ---------------------------------------------------------------------------
 # Paths & configuration
@@ -207,11 +207,9 @@ async def _startup() -> None:
     if not PLAYLIST_PATH.exists():
         raise RuntimeError(f"Source playlist not found: {PLAYLIST_PATH}")
     _state.reload_playlist()
-    # iptv-org index download is best-effort and doesn't block startup on failure
-    try:
+    # iptv-org index download is best-effort and doesn't block startup on failure.
+    with contextlib.suppress(Exception):  # deliberately swallow network errors
         await _state.iptv_index.load()
-    except Exception:  # noqa: BLE001 — deliberately swallow network errors
-        pass
     # EPG icon index — parse from cached XML if available (fast, no network)
     epg_gz = EPG_CACHE / "_epg.xml.gz"
     _state.epg_icons.load_from_xml_gz(epg_gz)
@@ -225,10 +223,9 @@ async def _startup() -> None:
 
 
 async def _load_epg_in_background() -> None:
-    try:
+    # Network / parse errors must not crash the app — fail silently.
+    with contextlib.suppress(Exception):
         await _state.epg.load()
-    except Exception:  # noqa: BLE001 — network/parse errors must not crash the app
-        pass
 
 
 async def _warm_logo_cache() -> None:
@@ -242,7 +239,8 @@ async def _warm_logo_cache() -> None:
     await asyncio.sleep(2)
 
     candidates = [
-        ch for ch in _state.playlist.channels
+        ch
+        for ch in _state.playlist.channels
         if not _state.logos.has_cached(ch.name)
         and (
             _rtrs_candidate(ch.name) is not None
@@ -259,10 +257,8 @@ async def _warm_logo_cache() -> None:
 
     async def _fetch_one(ch: Channel) -> None:
         async with sem:
-            try:
+            with contextlib.suppress(Exception):
                 await _state.logos.resolve(ch.name)
-            except Exception:  # noqa: BLE001
-                pass
 
     await asyncio.gather(*[_fetch_one(ch) for ch in candidates])
     _warming_done = True
@@ -319,8 +315,7 @@ def patch_source(body: SourceOperation) -> SourceResponse:
 
     elif body.op == "move_channel":
         new_channels = tuple(
-            ch.with_group(body.group) if ch.id == body.id else ch
-            for ch in _state.playlist.channels
+            ch.with_group(body.group) if ch.id == body.id else ch for ch in _state.playlist.channels
         )
         new_playlist = Playlist(header=_state.playlist.header, channels=new_channels)
         text = build_playlist(new_playlist.header, new_playlist.channels)
@@ -360,9 +355,7 @@ def _sync_main_to_source() -> None:
     # survives future clears / fresh imports.
     current_names = _state.store.state.main_names
     if current_names:
-        DEFAULT_NAMES_PATH.write_text(
-            "\n".join(current_names), encoding="utf-8"
-        )
+        DEFAULT_NAMES_PATH.write_text("\n".join(current_names), encoding="utf-8")
         _state.store.set_default_names(current_names)
 
 
@@ -463,8 +456,8 @@ def _match_names_to_ids(names_text: str, channels: tuple[Channel, ...]) -> list[
 
 @app.post("/api/import")
 async def import_playlist(
-    file: UploadFile = File(...),
-    names: str | None = Form(default=None),
+    file: UploadFile = File(...),  # noqa: B008 — idiomatic FastAPI dependency
+    names: str | None = Form(default=None),  # noqa: B008
 ) -> JSONResponse:
     """Replace the source playlist with an uploaded .m3u8 file.
 
@@ -493,8 +486,7 @@ async def import_playlist(
 
     # Case 2: source already has a "основное" group — carry it over.
     existing_main = [
-        ch for ch in _state.playlist.channels
-        if ch.group.lower() == MAIN_GROUP_NAME.lower()
+        ch for ch in _state.playlist.channels if ch.group.lower() == MAIN_GROUP_NAME.lower()
     ]
 
     if existing_main:
@@ -505,9 +497,7 @@ async def import_playlist(
         # latest curation.
         source_main_names = tuple(ch.name for ch in existing_main)
         if len(source_main_names) > len(_load_default_names()):
-            DEFAULT_NAMES_PATH.write_text(
-                "\n".join(source_main_names), encoding="utf-8"
-            )
+            DEFAULT_NAMES_PATH.write_text("\n".join(source_main_names), encoding="utf-8")
             _state.store.set_default_names(source_main_names)
 
         return JSONResponse({"ok": True, "total": len(_state.playlist.channels)})
@@ -596,14 +586,15 @@ def get_duplicates() -> JSONResponse:
         if ch.tvg_id:
             tvg_map.setdefault(ch.tvg_id, []).append(ch)
     for key, chs in tvg_map.items():
-        if len(chs) > 1:
-            if not {c.id for c in chs}.issubset(used_ids):
-                groups.append({
+        if len(chs) > 1 and not {c.id for c in chs}.issubset(used_ids):
+            groups.append(
+                {
                     "key": key,
                     "reason": "tvg_id",
                     "channels": [_channel_to_dto(c).model_dump() for c in chs],
-                })
-                used_ids.update(c.id for c in chs)
+                }
+            )
+            used_ids.update(c.id for c in chs)
 
     # Pass 2 — similar name (after quality-suffix removal)
     name_map: dict[str, list] = {}
@@ -614,11 +605,13 @@ def get_duplicates() -> JSONResponse:
                 name_map.setdefault(k, []).append(ch)
     for key, chs in name_map.items():
         if len(chs) > 1:
-            groups.append({
-                "key": key,
-                "reason": "name",
-                "channels": [_channel_to_dto(c).model_dump() for c in chs],
-            })
+            groups.append(
+                {
+                    "key": key,
+                    "reason": "name",
+                    "channels": [_channel_to_dto(c).model_dump() for c in chs],
+                }
+            )
             used_ids.update(c.id for c in chs)
 
     return JSONResponse({"total": len(groups), "groups": groups})
@@ -644,10 +637,7 @@ async def get_logo(channel_id: str) -> Response:
         raise HTTPException(404, "No logo")
 
     # Detect actual format — some sources return SVG despite our .png extension
-    if data[:5].lstrip().startswith(b"<"):
-        media_type = "image/svg+xml"
-    else:
-        media_type = "image/png"
+    media_type = "image/svg+xml" if data[:5].lstrip().startswith(b"<") else "image/png"
 
     return Response(
         content=data,

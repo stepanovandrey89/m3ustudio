@@ -25,7 +25,6 @@ import json
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 from server.playlist.models import Playlist
 from server.state.defaults import DEFAULT_ORDERED_NAMES
@@ -66,7 +65,9 @@ class StateStore:
         self._lock = threading.RLock()
         self._state: MainState = MainState(main_names=())
         self._playlist: Playlist = Playlist(header=(), channels=())
-        self._default_names: tuple[str, ...] = default_names if default_names is not None else DEFAULT_ORDERED_NAMES
+        self._default_names: tuple[str, ...] = (
+            default_names if default_names is not None else DEFAULT_ORDERED_NAMES
+        )
 
     def set_default_names(self, names: tuple[str, ...]) -> None:
         """Update the bootstrap defaults used when state.json is absent."""
@@ -89,7 +90,7 @@ class StateStore:
 
     # ---- Playlist binding ------------------------------------------------
 
-    def _name_for_id(self, channel_id: str) -> Optional[str]:
+    def _name_for_id(self, channel_id: str) -> str | None:
         for ch in self._playlist.channels:
             if ch.id == channel_id:
                 return ch.name
@@ -165,7 +166,7 @@ class StateStore:
             self._replace_names(names)
             return self._state
 
-    def add_id(self, channel_id: str, position: Optional[int] = None) -> MainState:
+    def add_id(self, channel_id: str, position: int | None = None) -> MainState:
         with self._lock:
             name = self._name_for_id(channel_id)
             if name is None:

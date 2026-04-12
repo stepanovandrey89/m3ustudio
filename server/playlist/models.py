@@ -10,10 +10,8 @@ from __future__ import annotations
 import hashlib
 import re
 from dataclasses import dataclass, field, replace
-from typing import Optional
 
-
-_EXTINF_RE = re.compile(r'^#EXTINF:(?P<dur>[^,]*),(?P<name>.*)$')
+_EXTINF_RE = re.compile(r"^#EXTINF:(?P<dur>[^,]*),(?P<name>.*)$")
 _GROUP_ATTR_RE = re.compile(r'group-title="(?P<group>[^"]*)"')
 _LOGO_ATTR_RE = re.compile(r'tvg-logo="(?P<logo>[^"]*)"')
 _TVGID_ATTR_RE = re.compile(r'tvg-id="(?P<id>[^"]*)"')
@@ -50,7 +48,7 @@ class Channel:
     raw_lines: tuple[str, ...] = field(default_factory=tuple)
 
     @classmethod
-    def from_lines(cls, lines: list[str]) -> Optional["Channel"]:
+    def from_lines(cls, lines: list[str]) -> Channel | None:
         """Build a Channel from a slice of m3u lines beginning with #EXTINF.
 
         Returns None if the slice doesn't contain a valid channel.
@@ -106,7 +104,7 @@ class Channel:
             raw_lines=tuple(lines),
         )
 
-    def with_group(self, group: str) -> "Channel":
+    def with_group(self, group: str) -> Channel:
         """Return a new Channel with group-title rewritten in both fields and raw_lines."""
         new_lines: list[str] = []
         for line in self.raw_lines:
@@ -119,7 +117,7 @@ class Channel:
 
 def _rewrite_group_title(extinf_line: str, group: str) -> str:
     """Replace or insert group-title="..." in a single #EXTINF line."""
-    match = re.match(r'^(#EXTINF:)([^,]*),(.*)$', extinf_line.rstrip("\n"))
+    match = re.match(r"^(#EXTINF:)([^,]*),(.*)$", extinf_line.rstrip("\n"))
     if not match:
         return extinf_line
 
@@ -144,7 +142,7 @@ class Playlist:
     header: tuple[str, ...]
     channels: tuple[Channel, ...]
 
-    def by_id(self, channel_id: str) -> Optional[Channel]:
+    def by_id(self, channel_id: str) -> Channel | None:
         for ch in self.channels:
             if ch.id == channel_id:
                 return ch

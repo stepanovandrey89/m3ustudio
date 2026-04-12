@@ -23,10 +23,8 @@ import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 import httpx
-
 
 CHANNELS_URL = "https://raw.githubusercontent.com/iptv-org/database/master/data/channels.csv"
 LOGOS_URL = "https://raw.githubusercontent.com/iptv-org/database/master/data/logos.csv"
@@ -36,8 +34,30 @@ _CACHE_TTL_SECONDS = 7 * 24 * 3600  # 7 days
 
 # Country markers we trim off channel names before normalizing.
 _COUNTRY_SUFFIXES = {
-    "ru", "uk", "us", "usa", "de", "ger", "es", "esp", "it", "ita", "fr", "fra",
-    "dk", "nl", "nor", "se", "fi", "pl", "cz", "sk", "by", "ua", "kz", "am",
+    "ru",
+    "uk",
+    "us",
+    "usa",
+    "de",
+    "ger",
+    "es",
+    "esp",
+    "it",
+    "ita",
+    "fr",
+    "fra",
+    "dk",
+    "nl",
+    "nor",
+    "se",
+    "fi",
+    "pl",
+    "cz",
+    "sk",
+    "by",
+    "ua",
+    "kz",
+    "am",
 }
 
 # Markers that don't change channel identity — stripped as plain tokens.
@@ -45,8 +65,15 @@ _COUNTRY_SUFFIXES = {
 # channel names collapse to a single generic word without it (e.g. "Первый
 # канал" would become just "первый"), which causes bad matches.
 _NOISE_TOKENS = {
-    "hd", "fhd", "uhd", "4k", "8k", "sd", "hq",
-    "tv", "тв",
+    "hd",
+    "fhd",
+    "uhd",
+    "4k",
+    "8k",
+    "sd",
+    "hq",
+    "tv",
+    "тв",
 }
 
 # Timezone/feed markers like "+0", "+1", "+2", "+3", "+4", "-1"
@@ -93,9 +120,7 @@ def is_specific_enough(key: str) -> bool:
     if not key or len(key) < 3:
         return False
     stripped = key.replace(" ", "")
-    if stripped.isdigit():
-        return False
-    return True
+    return not stripped.isdigit()
 
 
 @dataclass(frozen=True, slots=True)
@@ -211,15 +236,13 @@ class IptvOrgIndex:
                     existing = index.get(key)
                     # Prefer first occurrence; if a RU channel comes along, it wins
                     # over a foreign-country namesake.
-                    if existing is None:
-                        index[key] = entry
-                    elif existing.country != "RU" and entry.country == "RU":
+                    if existing is None or existing.country != "RU" and entry.country == "RU":
                         index[key] = entry
 
             self._index = index
             self._loaded = True
 
-    def lookup(self, channel_name: str) -> Optional[LogoEntry]:
+    def lookup(self, channel_name: str) -> LogoEntry | None:
         """Return a LogoEntry for a channel name, or None if no match."""
         key = normalize(channel_name)
         if not is_specific_enough(key):

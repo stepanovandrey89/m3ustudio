@@ -27,15 +27,14 @@ import asyncio
 import gzip
 import time
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
-from typing import IO, Optional
+from typing import IO
 from xml.etree import ElementTree as ET
 
 import httpx
 
 from server.logos.iptv_db import normalize
-
 
 DEFAULT_EPG_URL = "http://epg.it999.ru/edem.xml.gz"
 CACHE_TTL_SECONDS = 6 * 3600  # 6 hours
@@ -58,7 +57,7 @@ class Programme:
         }
 
 
-def _parse_xmltv_time(raw: str) -> Optional[datetime]:
+def _parse_xmltv_time(raw: str) -> datetime | None:
     """Parse XMLTV `YYYYMMDDhhmmss ±HHMM` into a timezone-aware datetime.
 
     XMLTV dates come in a compact numeric form. Examples:
@@ -83,7 +82,7 @@ def _parse_xmltv_time(raw: str) -> Optional[datetime]:
     except ValueError:
         return None
 
-    tz = timezone.utc
+    tz = UTC
     if tz_part:
         sign = 1 if tz_part[0] == "+" else -1 if tz_part[0] == "-" else 0
         if sign:
@@ -144,7 +143,7 @@ class EpgGuide:
             return False
         return (time.time() - path.stat().st_mtime) < CACHE_TTL_SECONDS
 
-    async def _download(self) -> Optional[Path]:
+    async def _download(self) -> Path | None:
         path = self._cache_path()
         if self._is_fresh(path):
             return path
@@ -179,7 +178,7 @@ class EpgGuide:
 
     def _parse(self, path: Path) -> dict[str, list[Programme]]:
         """Stream-parse the XMLTV file into a normalized-name → programmes map."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         window_start = now - timedelta(days=WINDOW_DAYS)
         window_end = now + timedelta(days=WINDOW_DAYS)
 
@@ -197,11 +196,7 @@ class EpgGuide:
                 if tag == "channel":
                     xml_id = elem.get("id", "")
                     if xml_id:
-                        names = [
-                            dn.text.strip()
-                            for dn in elem.findall("display-name")
-                            if dn.text
-                        ]
+                        names = [dn.text.strip() for dn in elem.findall("display-name") if dn.text]
                         if names:
                             channel_display_names[xml_id] = names
                     elem.clear()
@@ -211,29 +206,30 @@ class EpgGuide:
                     if xml_id in channel_display_names:
                         start = _parse_xmltv_time(elem.get("start", ""))
                         stop = _parse_xmltv_time(elem.get("stop", ""))
-                        if start is not None and stop is not None:
-                            # Time-window filter to keep memory small.
-                            if stop >= window_start and start <= window_end:
-                                title_el = elem.find("title")
-                                desc_el = elem.find("desc")
-                                title = (
-                                    title_el.text.strip()
-                                    if title_el is not None and title_el.text
-                                    else ""
+                        if (
+                            start is not None
+                            and stop is not None
+                            and stop >= window_start
+                            and start <= window_end
+                        ):
+                            title_el = elem.find("title")
+                            desc_el = elem.find("desc")
+                            title = (
+                                title_el.text.strip()
+                                if title_el is not None and title_el.text
+                                else ""
+                            )
+                            description = (
+                                desc_el.text.strip() if desc_el is not None and desc_el.text else ""
+                            )
+                            programmes_by_channel.setdefault(xml_id, []).append(
+                                Programme(
+                                    title=title,
+                                    description=description,
+                                    start=start,
+                                    stop=stop,
                                 )
-                                description = (
-                                    desc_el.text.strip()
-                                    if desc_el is not None and desc_el.text
-                                    else ""
-                                )
-                                programmes_by_channel.setdefault(xml_id, []).append(
-                                    Programme(
-                                        title=title,
-                                        description=description,
-                                        start=start,
-                                        stop=stop,
-                                    )
-                                )
+                            )
                     elem.clear()
 
         # Sort each channel's programmes by start time
@@ -288,7 +284,7 @@ class EpgGuide:
         channel_name: str,
         past: timedelta = timedelta(hours=2),
         future: timedelta = timedelta(hours=12),
-    ) -> tuple[Optional[int], list[Programme]]:
+    ) -> tuple[int | None, list[Programme]]:
         """Return (current_index, programmes_in_window).
 
         `current_index` points at the programme currently airing, or None if
@@ -298,7 +294,7 @@ class EpgGuide:
         if not all_progs:
             return None, []
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         window_start = now - past
         window_end = now + future
 
@@ -306,7 +302,7 @@ class EpgGuide:
         if not visible:
             return None, []
 
-        current_index: Optional[int] = None
+        current_index: int | None = None
         for i, p in enumerate(visible):
             if p.start <= now <= p.stop:
                 current_index = i

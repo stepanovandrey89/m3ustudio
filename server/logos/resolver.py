@@ -21,14 +21,12 @@ import asyncio
 import re
 import unicodedata
 from pathlib import Path
-from typing import Optional
 from urllib.parse import quote
 
 import httpx
 
 from server.logos.epg_icons import EpgIconIndex
 from server.logos.iptv_db import IptvOrgIndex, LogoEntry
-
 
 # Browser-like UA — many image hosts reject python-httpx default UA.
 _BROWSER_UA = (
@@ -47,47 +45,48 @@ _TV_LOGOS_CDN = "https://cdn.jsdelivr.net/gh/tv-logo/tv-logos@main/countries"
 # We match by lowercase channel name (+ stripped quality suffixes).
 _RTRS_CDN = "https://raw.githubusercontent.com/vattik/picons-rtrs/master/220x100/"
 _RTRS_MAP: dict[str, str] = {
-    "первый канал":  "01 ПЕРВЫЙ КАНАЛ",
-    "россия-1":      "02 РОССИЯ-1",
-    "россия 1":      "02 РОССИЯ-1",
-    "матч!":         "03 МАТЧ!",
-    "матч тв":       "03 МАТЧ!",
-    "нтв":           "04 НТВ",
-    "пятый канал":   "05 ПЯТЫЙ КАНАЛ",
-    "россия-к":      "06 РОССИЯ-К",
-    "россия к":      "06 РОССИЯ-К",
-    "культура":      "06 РОССИЯ-К",
-    "россия-24":     "07 РОССИЯ-24",
-    "россия 24":     "07 РОССИЯ-24",
-    "карусель":      "08 КАРУСЕЛЬ",
-    "отр":           "09 ОТР",
-    "тв центр":      "10 ТВ Центр",
-    "рен тв":        "11 РЕН ТВ",
-    "рентв":         "11 РЕН ТВ",
-    "спас":          "12 Спас",
-    "стс":           "13 СТС",
-    "домашний":      "14 Домашний",
-    "тв3":           "15 ТВ3",
-    "тв 3":          "15 ТВ3",
-    "пятница":       "16 Пятница",
-    "пятница!":      "16 Пятница",
-    "звезда":        "17 Звезда",
-    "мир":           "18 МИР",
-    "тнт":           "19 ТНТ",
-    "муз тв":        "20 МУЗ ТВ",
-    "муз-тв":        "20 МУЗ ТВ",
+    "первый канал": "01 ПЕРВЫЙ КАНАЛ",
+    "россия-1": "02 РОССИЯ-1",
+    "россия 1": "02 РОССИЯ-1",
+    "матч!": "03 МАТЧ!",
+    "матч тв": "03 МАТЧ!",
+    "нтв": "04 НТВ",
+    "пятый канал": "05 ПЯТЫЙ КАНАЛ",
+    "россия-к": "06 РОССИЯ-К",
+    "россия к": "06 РОССИЯ-К",
+    "культура": "06 РОССИЯ-К",
+    "россия-24": "07 РОССИЯ-24",
+    "россия 24": "07 РОССИЯ-24",
+    "карусель": "08 КАРУСЕЛЬ",
+    "отр": "09 ОТР",
+    "тв центр": "10 ТВ Центр",
+    "рен тв": "11 РЕН ТВ",
+    "рентв": "11 РЕН ТВ",
+    "спас": "12 Спас",
+    "стс": "13 СТС",
+    "домашний": "14 Домашний",
+    "тв3": "15 ТВ3",
+    "тв 3": "15 ТВ3",
+    "пятница": "16 Пятница",
+    "пятница!": "16 Пятница",
+    "звезда": "17 Звезда",
+    "мир": "18 МИР",
+    "тнт": "19 ТНТ",
+    "муз тв": "20 МУЗ ТВ",
+    "муз-тв": "20 МУЗ ТВ",
 }
 
 _QUALITY_RE = re.compile(r"\s*(hd|fhd|uhd|4k|\+\d+)\s*$", re.IGNORECASE)
 
 
-def _rtrs_candidate(name: str) -> Optional[str]:
+def _rtrs_candidate(name: str) -> str | None:
     """Return a vattik/picons-rtrs URL if the channel is one of the 20 RTRS channels."""
     key = _QUALITY_RE.sub("", name.strip()).lower()
     filename = _RTRS_MAP.get(key)
     if filename is None:
         return None
     return _RTRS_CDN + quote(filename + ".png")
+
 
 # Map iptv-org country code → tv-logos directory name.
 # World directory is always a fallback.
@@ -184,8 +183,8 @@ class LogoResolver:
     def __init__(
         self,
         cache_dir: Path,
-        iptv_index: Optional[IptvOrgIndex] = None,
-        epg_index: Optional[EpgIconIndex] = None,
+        iptv_index: IptvOrgIndex | None = None,
+        epg_index: EpgIconIndex | None = None,
         timeout: float = 8.0,
     ) -> None:
         self._cache_dir = cache_dir
@@ -200,13 +199,13 @@ class LogoResolver:
         self._slug_locks: dict[str, asyncio.Lock] = {}
 
     @property
-    def index(self) -> Optional[IptvOrgIndex]:
+    def index(self) -> IptvOrgIndex | None:
         return self._index
 
     def cache_path(self, slug: str) -> Path:
         return self._cache_dir / f"{slug}.png"
 
-    def cached_bytes(self, slug: str) -> Optional[bytes]:
+    def cached_bytes(self, slug: str) -> bytes | None:
         path = self.cache_path(slug)
         if path.exists() and path.stat().st_size > 0:
             try:
@@ -218,7 +217,7 @@ class LogoResolver:
     def has_cached(self, name: str) -> bool:
         return self.cached_bytes(_fs_slug(name)) is not None
 
-    async def resolve(self, name: str) -> Optional[bytes]:
+    async def resolve(self, name: str) -> bytes | None:
         slug = _fs_slug(name)
         if not slug:
             return None
@@ -253,7 +252,7 @@ class LogoResolver:
                 candidates.append(rtrs)
 
             # 2) tv-logos CDN, derived from iptv-org entry (English name + country).
-            entry: Optional[LogoEntry] = None
+            entry: LogoEntry | None = None
             if self._index is not None:
                 entry = self._index.lookup(name)
                 if entry is not None:

@@ -5,7 +5,6 @@ This list is the same as sort_playlist_osnovnoe.py's DEFAULT_ORDERED_NAMES.
 
 from __future__ import annotations
 
-
 DEFAULT_ORDERED_NAMES: tuple[str, ...] = (
     "Первый канал HD",
     "Первый канал +4 HD",

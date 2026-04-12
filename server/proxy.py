@@ -10,12 +10,11 @@ The proxy is intentionally minimal — no auth, no quota. It only runs on localh
 
 from __future__ import annotations
 
-from urllib.parse import urljoin, urlparse, urlencode
+from urllib.parse import urlencode, urljoin, urlparse
 
 import httpx
 from fastapi import HTTPException
-from fastapi.responses import Response, StreamingResponse
-
+from fastapi.responses import Response
 
 _HOP_BY_HOP = {
     "connection",
@@ -48,7 +47,7 @@ def _rewrite_manifest(body: str, upstream_url: str, proxy_base: str) -> str:
             if "URI=" in stripped:
                 import re
 
-                def sub(m: "re.Match[str]") -> str:
+                def sub(m: re.Match[str]) -> str:
                     raw_uri = m.group(1)
                     absolute = raw_uri if raw_uri.startswith("http") else urljoin(base, raw_uri)
                     return f'URI="{proxy_base}?{urlencode({"u": absolute})}"'
@@ -64,7 +63,7 @@ def _rewrite_manifest(body: str, upstream_url: str, proxy_base: str) -> str:
 
 
 async def proxy_stream(url: str, proxy_base: str) -> Response:
-    if not url or not urlparse(url).scheme in ("http", "https"):
+    if not url or urlparse(url).scheme not in ("http", "https"):
         raise HTTPException(400, "Invalid upstream URL")
 
     headers = {

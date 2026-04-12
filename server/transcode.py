@@ -18,13 +18,12 @@ which is served via `/api/transcode/{id}/{filename}` from main.py.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import shutil
 import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
-
 
 FFMPEG_READY_TIMEOUT_SECONDS = 12.0
 IDLE_TIMEOUT_SECONDS = 120.0
@@ -77,7 +76,7 @@ class TranscodeManager:
         safe = "".join(c if c.isalnum() else "_" for c in channel_id)[:32]
         return self._root / safe
 
-    def get(self, channel_id: str) -> Optional[TranscodeSession]:
+    def get(self, channel_id: str) -> TranscodeSession | None:
         return self._sessions.get(channel_id)
 
     async def ensure_started(self, channel_id: str, upstream_url: str) -> TranscodeSession:
@@ -103,23 +102,40 @@ class TranscodeManager:
                 self._ffmpeg,
                 "-nostdin",
                 "-hide_banner",
-                "-loglevel", "warning",
-                "-user_agent", "VLC/3.0.20 LibVLC/3.0.20",
-                "-reconnect", "1",
-                "-reconnect_streamed", "1",
-                "-reconnect_delay_max", "5",
-                "-i", upstream_url,
-                "-map", "0:v:0?",
-                "-map", "0:a:0?",
-                "-c:v", "copy",
-                "-c:a", "aac",
-                "-ac", "2",
-                "-b:a", "192k",
-                "-f", "hls",
-                "-hls_time", "4",
-                "-hls_list_size", "6",
-                "-hls_flags", "delete_segments+independent_segments+omit_endlist",
-                "-hls_segment_filename", str(session_dir / "seg%03d.ts"),
+                "-loglevel",
+                "warning",
+                "-user_agent",
+                "VLC/3.0.20 LibVLC/3.0.20",
+                "-reconnect",
+                "1",
+                "-reconnect_streamed",
+                "1",
+                "-reconnect_delay_max",
+                "5",
+                "-i",
+                upstream_url,
+                "-map",
+                "0:v:0?",
+                "-map",
+                "0:a:0?",
+                "-c:v",
+                "copy",
+                "-c:a",
+                "aac",
+                "-ac",
+                "2",
+                "-b:a",
+                "192k",
+                "-f",
+                "hls",
+                "-hls_time",
+                "4",
+                "-hls_list_size",
+                "6",
+                "-hls_flags",
+                "delete_segments+independent_segments+omit_endlist",
+                "-hls_segment_filename",
+                str(session_dir / "seg%03d.ts"),
                 str(session_dir / "index.m3u8"),
             ]
 
@@ -216,10 +232,8 @@ class TranscodeManager:
                 pass
 
         # Remove session dir
-        try:
+        with contextlib.suppress(OSError):
             shutil.rmtree(session.session_dir, ignore_errors=True)
-        except OSError:
-            pass
 
 
 async def run_cleanup_loop(manager: TranscodeManager) -> None:

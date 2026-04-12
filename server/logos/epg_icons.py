@@ -14,14 +14,23 @@ from __future__ import annotations
 import gzip
 import re
 from pathlib import Path
-from typing import Optional
-
 
 # Tokens stripped before key comparison
-_NOISE = frozenset({
-    "hd", "fhd", "uhd", "4k", "8k", "sd", "hq",
-    "+", "!", ".", ",",
-})
+_NOISE = frozenset(
+    {
+        "hd",
+        "fhd",
+        "uhd",
+        "4k",
+        "8k",
+        "sd",
+        "hq",
+        "+",
+        "!",
+        ".",
+        ",",
+    }
+)
 _QUALITY_RE = re.compile(r"\s*(hd|fhd|uhd|4k|\+\d+)\s*$", re.IGNORECASE)
 
 
@@ -51,7 +60,7 @@ class EpgIconIndex:
 
         index: dict[str, str] = {}
         current_names: list[str] = []
-        current_icon: Optional[str] = None
+        current_icon: str | None = None
         in_channel = False
 
         try:
@@ -80,7 +89,7 @@ class EpgIconIndex:
 
         self._index = index
 
-    def lookup(self, channel_name: str) -> Optional[str]:
+    def lookup(self, channel_name: str) -> str | None:
         """Return an icon URL for the channel name, or None."""
         key = _norm(channel_name)
         if not key or len(key) < 2:
