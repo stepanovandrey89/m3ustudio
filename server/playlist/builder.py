@@ -7,9 +7,17 @@ channels we haven't touched and preserves any tags we don't parse.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 
 from server.playlist.models import Channel
+
+_CYR_RE = re.compile(r"^[а-яёА-ЯЁ]")
+
+
+def _cyr_first_key(name: str) -> tuple[int, str]:
+    """Sort key: Cyrillic names first (0), then Latin (1), case-insensitive."""
+    return (0 if _CYR_RE.match(name) else 1, name.lower())
 
 
 def build_playlist(header: Iterable[str], channels: Iterable[Channel]) -> str:
@@ -37,8 +45,9 @@ def build_with_main_group(
     header: Iterable[str],
     all_channels: Iterable[Channel],
     main_ids: Iterable[str],
-    group_name: str = "основное",
+    group_name: str = "Основное",
     original_groups: dict[str, str] | None = None,
+    group_order: list[str] | None = None,
 ) -> str:
     """Produce the final playlist: main_ids (in order, rewritten to group_name),
     followed by the remaining channels in their original order.
@@ -79,5 +88,22 @@ def build_with_main_group(
             rest_channels.append(ch.with_group(original_groups[ch.id]))
         else:
             rest_channels.append(ch)
+
+    # Capitalize group names so they display consistently (e.g. "спорт" → "Спорт").
+    rest_channels = [
+        ch.with_group(ch.group[0].upper() + ch.group[1:]) if ch.group and not ch.group[0].isupper() else ch
+        for ch in rest_channels
+    ]
+
+    # Sort rest by group order (user-defined if available, else Cyrillic-first
+    # alphabetical), then by channel name within each group.
+    if group_order:
+        order_map = {name: i for i, name in enumerate(group_order)}
+        fallback = len(group_order)
+        rest_channels.sort(
+            key=lambda ch: (order_map.get(ch.group, fallback), _cyr_first_key(ch.name))
+        )
+    else:
+        rest_channels.sort(key=lambda ch: (_cyr_first_key(ch.group), _cyr_first_key(ch.name)))
 
     return build_playlist(header, [*main_channels, *rest_channels])

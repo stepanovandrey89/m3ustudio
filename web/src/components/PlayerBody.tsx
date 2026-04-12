@@ -16,6 +16,7 @@ import {
   Play,
   Radio,
   Square,
+  Trash2,
   Volume2,
   X,
 } from 'lucide-react'
@@ -44,6 +45,8 @@ export interface PlayerBodyProps {
   onToggleEpg: () => void
   onNavigate: (next: Channel) => void
   onFavorite: (channelId: string) => void
+  /** Remove current channel from Main and navigate to next. */
+  onRemoveChannel: (channelId: string) => void
   onClose: () => void
   /** Called on pointerdown of the drag-handle area. */
   onDragHandlePointerDown?: (e: React.PointerEvent) => void
@@ -59,6 +62,7 @@ export function PlayerBody({
   onToggleEpg,
   onNavigate,
   onFavorite,
+  onRemoveChannel,
   onClose,
   onDragHandlePointerDown,
 }: PlayerBodyProps) {
@@ -281,8 +285,16 @@ export function PlayerBody({
   }, [])
 
   const handleFavorite = useCallback(() => {
-    if (!inMain) onFavorite(channel.id)
-  }, [inMain, onFavorite, channel.id])
+    onFavorite(channel.id)
+  }, [onFavorite, channel.id])
+
+  const handleRemoveChannel = useCallback(() => {
+    // Navigate to the next channel before removing, so the player doesn't close
+    if (next) onNavigate(next)
+    else if (prev) onNavigate(prev)
+    else onClose()
+    onRemoveChannel(channel.id)
+  }, [next, prev, channel.id, onNavigate, onRemoveChannel, onClose])
 
   const handlePlayProgramme = useCallback(
     (programme: Programme) => {
@@ -580,6 +592,10 @@ export function PlayerBody({
 
             <FavoriteButton inMain={inMain} onClick={handleFavorite} />
 
+            <ControlButton label="Delete channel" onClick={handleRemoveChannel}>
+              <Trash2 className="h-4 w-4" />
+            </ControlButton>
+
             {/* Record button */}
             <RecordButton
               recording={recording}
@@ -773,12 +789,12 @@ function FavoriteButton({ inMain, onClick }: FavoriteButtonProps) {
       whileTap={{ scale: 0.85 }}
       animate={inMain ? { scale: [1, 1.15, 1] } : { scale: 1 }}
       transition={{ duration: 0.25 }}
-      title={inMain ? 'Already in Main' : 'Add to Main'}
-      aria-label={inMain ? 'Already in Main' : 'Add to Main'}
+      title={inMain ? 'Remove from Main' : 'Add to Main'}
+      aria-label={inMain ? 'Remove from Main' : 'Add to Main'}
       className={cn(
         'flex h-9 w-9 items-center justify-center rounded-lg border transition',
         inMain
-          ? 'cursor-default border-[var(--color-rose-primary)]/40 bg-[var(--color-rose-primary)]/15 text-[var(--color-rose-primary)]'
+          ? 'border-[var(--color-rose-primary)]/40 bg-[var(--color-rose-primary)]/15 text-[var(--color-rose-primary)] hover:bg-[var(--color-rose-primary)]/25'
           : 'border-white/10 bg-white/5 text-fog-200 hover:border-[var(--color-rose-primary)]/40 hover:bg-[var(--color-rose-primary)]/10 hover:text-[var(--color-rose-primary)]',
       )}
     >

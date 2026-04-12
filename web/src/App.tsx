@@ -30,6 +30,7 @@ import {
 import { useIsMobile } from './hooks/useIsMobile'
 import { useTheme } from './hooks/useTheme'
 import { cn } from './lib/cn'
+import { cyrFirstCompare } from './lib/sort'
 import type { Channel } from './types'
 
 // ---------------------------------------------------------------------------
@@ -138,7 +139,7 @@ function App() {
     for (const [name, list] of Object.entries(source.data.groups)) {
       const sorted = name.toLowerCase() === 'основное'
         ? list
-        : [...list].sort((a, b) => a.name.localeCompare(b.name, 'ru', { sensitivity: 'base' }))
+        : [...list].sort((a, b) => cyrFirstCompare(a.name, b.name))
       out.push(...sorted)
     }
     return out
@@ -161,8 +162,11 @@ function App() {
   )
   const handleFavorite = useCallback(
     (channelId: string) => {
-      if (mainIds.has(channelId)) return
-      mutate.mutate({ op: 'add', id: channelId })
+      if (mainIds.has(channelId)) {
+        mutate.mutate({ op: 'remove', id: channelId })
+      } else {
+        mutate.mutate({ op: 'add', id: channelId })
+      }
     },
     [mainIds, mutate],
   )
@@ -452,6 +456,7 @@ function App() {
         mainIds={mainIds}
         onNavigate={handleNavigate}
         onFavorite={handleFavorite}
+        onRemoveChannel={(id) => sourceMutate.mutate({ op: 'delete_channel', id })}
         onClose={() => setPreview(null)}
       />
 

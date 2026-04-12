@@ -70,4 +70,10 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ names }),
     }),
+  getGroupOrder: () => request<{ order: string[] }>('/api/groups/order'),
+  setGroupOrder: (order: string[]) =>
+    request<{ ok: boolean }>('/api/groups/order', {
+      method: 'PUT',
+      body: JSON.stringify({ order }),
+    }),
 }

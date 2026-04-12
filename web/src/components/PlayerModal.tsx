@@ -12,6 +12,7 @@ interface PlayerModalProps {
   mainIds: Set<string>
   onNavigate: (next: Channel) => void
   onFavorite: (channelId: string) => void
+  onRemoveChannel: (channelId: string) => void
   onClose: () => void
 }
 
@@ -24,6 +25,7 @@ export function PlayerModal({
   mainIds,
   onNavigate,
   onFavorite,
+  onRemoveChannel,
   onClose,
 }: PlayerModalProps) {
   const isMobile = useIsMobile()
@@ -166,6 +168,7 @@ export function PlayerModal({
               onToggleEpg={toggleEpg}
               onNavigate={onNavigate}
               onFavorite={onFavorite}
+              onRemoveChannel={onRemoveChannel}
               onClose={onClose}
               onDragHandlePointerDown={isMobile ? undefined : startDrag}
             />

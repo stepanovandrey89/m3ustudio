@@ -2,12 +2,20 @@ import {
   useDraggable,
   useDroppable,
 } from '@dnd-kit/core'
+import {
+  SortableContext,
+  useSortable,
+  verticalListSortingStrategy,
+  arrayMove,
+} from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { ChevronDown, GripVertical, Pencil, Plus, Search, Trash2, X } from 'lucide-react'
-import { useRef, useState } from 'react'
+import { ArrowDown, ArrowUp, ChevronDown, GripVertical, Pencil, Plus, Search, Trash2, X } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useMemo } from 'react'
 import type { Channel } from '../types'
+import { api } from '../lib/api'
 import { cn } from '../lib/cn'
+import { cyrFirstCompare } from '../lib/sort'
 import { useIsMobile } from '../hooks/useIsMobile'
 import { useSourceMutation } from '../hooks/usePlaylist'
 import { ChannelLogo } from './ChannelLogo'
@@ -40,18 +48,39 @@ export function SourcePanel({ groups, mainIds, onAdd, onPreview }: SourcePanelPr
     return out
   }, [groups, q])
 
-  // Sort channels A→Я within every group except "Основное"
+  // Sort channels: Cyrillic А→Я first, then Latin A→Z (except "Основное" — user-curated order)
   const sorted = useMemo(() => {
     const out: Record<string, Channel[]> = {}
     for (const [name, channels] of Object.entries(filtered)) {
       out[name] = name.toLowerCase() === 'основное'
         ? channels
-        : [...channels].sort((a, b) => a.name.localeCompare(b.name, 'ru', { sensitivity: 'base' }))
+        : [...channels].sort((a, b) => cyrFirstCompare(a.name, b.name))
     }
     return out
   }, [filtered])
 
-  const entries = useMemo(() => Object.entries(sorted), [sorted])
+  // Persisted group order from server
+  const [groupOrder, setGroupOrder] = useState<string[]>([])
+  useEffect(() => {
+    api.getGroupOrder().then((r) => setGroupOrder(r.order)).catch(() => {})
+  }, [])
+
+  const entries = useMemo(() => {
+    const raw = Object.entries(sorted)
+    if (groupOrder.length === 0) return raw
+    const orderMap = new Map(groupOrder.map((name, i) => [name, i]))
+    const fallback = groupOrder.length
+    return [...raw].sort(([a], [b]) => (orderMap.get(a) ?? fallback) - (orderMap.get(b) ?? fallback))
+  }, [sorted, groupOrder])
+
+  const groupNames = useMemo(() => entries.map(([name]) => name), [entries])
+
+  const handleGroupReorder = useCallback((from: number, to: number) => {
+    const newOrder = arrayMove(groupNames, from, to)
+    setGroupOrder(newOrder)
+    api.setGroupOrder(newOrder).catch(() => {})
+  }, [groupNames])
+
   const totalCount = useMemo(
     () => Object.values(groups).reduce((sum, list) => sum + list.length, 0),
     [groups],
@@ -132,7 +161,7 @@ export function SourcePanel({ groups, mainIds, onAdd, onPreview }: SourcePanelPr
           </div>
         )}
 
-        {entries.map(([groupName, channels]) => (
+        {entries.map(([groupName, channels], idx) => (
           <SourceGroup
             key={groupName}
             name={groupName}
@@ -142,6 +171,8 @@ export function SourcePanel({ groups, mainIds, onAdd, onPreview }: SourcePanelPr
             isMobile={isMobile}
             onToggle={() => toggle(groupName)}
             onRename={(newName) => handleRenameGroup(groupName, newName)}
+            onMoveUp={idx > 0 ? () => handleGroupReorder(idx, idx - 1) : undefined}
+            onMoveDown={idx < entries.length - 1 ? () => handleGroupReorder(idx, idx + 1) : undefined}
             onAdd={onAdd}
             onDelete={handleDeleteChannel}
             onPreview={onPreview}
@@ -161,6 +192,8 @@ interface SourceGroupProps {
   isMobile: boolean
   onToggle: () => void
   onRename: (newName: string) => void
+  onMoveUp?: () => void
+  onMoveDown?: () => void
   onAdd: (channelId: string) => void
   onDelete: (channelId: string) => void
   onPreview: (channel: Channel) => void
@@ -175,6 +208,8 @@ function SourceGroup({
   isMobile,
   onToggle,
   onRename,
+  onMoveUp,
+  onMoveDown,
   onAdd,
   onDelete,
   onPreview,
@@ -244,9 +279,24 @@ function SourceGroup({
           )}
         </button>
 
-        <span className="tabnum shrink-0 font-mono text-[10px] text-fog-100/50">
-          {channels.length}
-        </span>
+        {!editing && (
+          <button type="button" onClick={(e) => { e.stopPropagation(); onMoveUp?.() }}
+            disabled={!onMoveUp}
+            className={cn('flex h-5 w-5 shrink-0 items-center justify-center rounded transition',
+              onMoveUp ? 'text-fog-100/0 group-hover/header:text-fog-100/30 hover:!text-fog-100' : 'invisible'
+            )} title="Move up">
+            <ArrowUp className="h-3 w-3" />
+          </button>
+        )}
+        {!editing && (
+          <button type="button" onClick={(e) => { e.stopPropagation(); onMoveDown?.() }}
+            disabled={!onMoveDown}
+            className={cn('flex h-5 w-5 shrink-0 items-center justify-center rounded transition',
+              onMoveDown ? 'text-fog-100/0 group-hover/header:text-fog-100/30 hover:!text-fog-100' : 'invisible'
+            )} title="Move down">
+            <ArrowDown className="h-3 w-3" />
+          </button>
+        )}
 
         {!editing && (
           <button
@@ -261,6 +311,10 @@ function SourceGroup({
             <Pencil className="h-3 w-3" />
           </button>
         )}
+
+        <span className="ml-auto tabnum shrink-0 pr-3 font-mono text-[10px] text-fog-100/50">
+          {channels.length}
+        </span>
       </div>
 
       {open && (

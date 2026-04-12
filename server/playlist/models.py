@@ -105,11 +105,19 @@ class Channel:
         )
 
     def with_group(self, group: str) -> Channel:
-        """Return a new Channel with group-title rewritten in both fields and raw_lines."""
+        """Return a new Channel with group-title rewritten in both fields and raw_lines.
+
+        Rewrites both the ``group-title="..."`` attribute in the #EXTINF line
+        AND any ``#EXTGRP:<name>`` line so the file is internally consistent.
+        """
         new_lines: list[str] = []
         for line in self.raw_lines:
-            if line.lstrip().startswith("#EXTINF"):
+            stripped = line.lstrip()
+            if stripped.startswith("#EXTINF"):
                 new_lines.append(_rewrite_group_title(line, group))
+            elif stripped.upper().startswith("#EXTGRP:"):
+                suffix = "\n" if line.endswith("\n") else ""
+                new_lines.append(f"#EXTGRP:{group}{suffix}")
             else:
                 new_lines.append(line)
         return replace(self, group=group, raw_lines=tuple(new_lines))

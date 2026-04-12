@@ -260,8 +260,8 @@ function SortableRow({
         </button>
       )}
 
-      <span className="tabnum w-7 shrink-0 text-right font-mono text-[11px] font-medium text-fog-100/50">
-        {String(index).padStart(2, '0')}
+      <span className="tabnum w-5 shrink-0 text-left font-mono text-[10px] text-fog-100/40">
+        {index}
       </span>
 
       <ChannelLogo id={channel.id} name={channel.name} hasLogo={channel.has_logo} size={36} />

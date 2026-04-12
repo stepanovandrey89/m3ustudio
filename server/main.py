@@ -47,7 +47,7 @@ TRANSCODE_ROOT = Path(os.environ.get("M3U_TRANSCODE_DIR", PROJECT_ROOT / "transc
 FFMPEG_BIN = os.environ.get("M3U_FFMPEG_BIN", "ffmpeg")
 STATIC_DIST = PROJECT_ROOT / "web" / "dist"
 
-MAIN_GROUP_NAME = "основное"
+MAIN_GROUP_NAME = "Основное"
 
 
 # ---------------------------------------------------------------------------
@@ -287,6 +287,15 @@ def get_source() -> SourceResponse:
     for ch in _state.playlist.channels:
         dto = _channel_to_dto(ch)
         grouped.setdefault(dto.group, []).append(dto)
+    # Apply stored group order (groups not in the order list go last, alphabetically)
+    order = _state.store.get_group_order()
+    if order:
+        order_map = {name: i for i, name in enumerate(order)}
+        fallback = len(order)
+        sorted_groups: dict[str, list[ChannelDTO]] = {}
+        for name in sorted(grouped, key=lambda g: (order_map.get(g, fallback), g.lower())):
+            sorted_groups[name] = grouped[name]
+        grouped = sorted_groups
     return SourceResponse(total=len(_state.playlist.channels), groups=grouped)
 
 
@@ -356,6 +365,7 @@ def _sync_main_to_source() -> None:
         main_ids=main_ids,
         group_name=MAIN_GROUP_NAME,
         original_groups=_state.store.original_groups_map(),
+        group_order=_state.store.get_group_order(),
     )
     PLAYLIST_PATH.write_text(text, encoding="utf-8")
     _state.playlist = parse_playlist(PLAYLIST_PATH)
@@ -411,6 +421,7 @@ def export_playlist() -> PlainTextResponse:
         main_ids=_state.store.current_ids(),
         group_name=MAIN_GROUP_NAME,
         original_groups=_state.store.original_groups_map(),
+        group_order=_state.store.get_group_order(),
     )
     return PlainTextResponse(
         content=text,
@@ -530,6 +541,7 @@ async def import_playlist(
             main_ids=seeded_ids,
             group_name=MAIN_GROUP_NAME,
             original_groups=_state.store.original_groups_map(),
+            group_order=_state.store.get_group_order(),
         )
         PLAYLIST_PATH.write_text(new_text, encoding="utf-8")
         # Reload so in-memory channels reflect the new group-title.
@@ -549,6 +561,24 @@ def clear_main_state() -> JSONResponse:
     STATE_PATH.unlink(missing_ok=True)
     # Reload so in-memory state matches the now-empty file
     _state.reload_playlist()
+    return JSONResponse({"ok": True})
+
+
+# ---------- Group order ----------
+
+
+class GroupOrderBody(BaseModel):
+    order: list[str] = Field(default_factory=list)
+
+
+@app.get("/api/groups/order")
+def get_group_order() -> JSONResponse:
+    return JSONResponse({"order": _state.store.get_group_order()})
+
+
+@app.put("/api/groups/order")
+def put_group_order(body: GroupOrderBody) -> JSONResponse:
+    _state.store.set_group_order(body.order)
     return JSONResponse({"ok": True})
 
 

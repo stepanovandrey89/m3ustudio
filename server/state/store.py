@@ -81,6 +81,8 @@ class StateStore:
         # when new channels appear. Used by build_with_main_group to restore
         # removed-from-Main channels to their real groups.
         self._original_groups: dict[str, str] = {}
+        # User-defined group display/export order. Empty = alphabetical default.
+        self._group_order: list[str] = []
 
     def set_default_names(self, names: tuple[str, ...]) -> None:
         """Update the bootstrap defaults used when state.json is absent."""
@@ -126,6 +128,17 @@ class StateStore:
         """
         with self._lock:
             self._original_groups = {ch.id: ch.group for ch in playlist.channels}
+            self._persist_unlocked()
+
+    # ---- Group order -----------------------------------------------------
+
+    def get_group_order(self) -> list[str]:
+        with self._lock:
+            return list(self._group_order)
+
+    def set_group_order(self, order: list[str]) -> None:
+        with self._lock:
+            self._group_order = list(order)
             self._persist_unlocked()
 
     @property
@@ -187,6 +200,9 @@ class StateStore:
                             self._original_groups = {
                                 str(k): str(v) for k, v in raw_groups.items() if k and v
                             }
+                        raw_order = data.get("group_order")
+                        if isinstance(raw_order, list):
+                            self._group_order = [str(g) for g in raw_order if g]
                         return self._state
 
                     if version == 2 and isinstance(data.get("main_names"), list):
@@ -275,11 +291,13 @@ class StateStore:
 
     def _persist_unlocked(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {
+        payload: dict = {
             "version": 3,
             "main_names": list(self._state.main_names),
             "original_groups": dict(self._original_groups),
         }
+        if self._group_order:
+            payload["group_order"] = list(self._group_order)
         tmp = self._path.with_suffix(self._path.suffix + ".tmp")
         tmp.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2),
