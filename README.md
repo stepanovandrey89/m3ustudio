@@ -223,6 +223,16 @@ Environment variables (all optional — safe defaults are used if unset):
 
 ---
 
+## Support the project
+
+If m3u Studio saves you time, you can send any amount as a tip:
+
+**USDT (TRC20)** — `TLB4mTGtmUrbEvKN78kg4b1AdCD4Jxnf1k`
+
+Every contribution helps keep the project maintained and improved.
+
+---
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
