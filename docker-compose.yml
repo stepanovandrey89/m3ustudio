@@ -1,0 +1,27 @@
+services:
+  m3ustudio:
+    build: .
+    image: m3ustudio:latest
+    container_name: m3ustudio
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      # Override the XMLTV EPG URL here if you have a different source.
+      M3U_EPG_URL: http://epg.it999.ru/edem.xml.gz
+      # Paths inside the container — leave as-is unless you know what you're doing.
+      M3U_SOURCE: /data/playlist.m3u8
+      M3U_STATE: /data/state.json
+      M3U_DEFAULT_NAMES: /data/default_names.txt
+      M3U_LOGO_CACHE: /data/logos_cache
+      M3U_EPG_CACHE: /data/epg_cache
+      M3U_TRANSCODE_DIR: /data/transcode_tmp
+    volumes:
+      # Persist your playlist, state and all caches between container restarts.
+      - ./data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/api/source"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s

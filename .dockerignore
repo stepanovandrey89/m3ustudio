@@ -1,0 +1,32 @@
+.git
+.gitignore
+.github
+.venv
+.vscode
+.idea
+.DS_Store
+*.pyc
+__pycache__
+*.egg-info
+
+# Runtime data — must not be baked into the image
+state.json
+playlist.m3u8
+*.m3u
+*.m3u8
+logos_cache
+epg_cache
+transcode_tmp
+data
+
+# Frontend build artifacts and deps (rebuilt inside the image)
+web/node_modules
+web/dist
+web/.vite
+
+# Tests / docs not needed at build time
+tests
+docs
+*.md
+!README.md
+LICENSE

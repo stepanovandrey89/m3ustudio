@@ -1,0 +1,91 @@
+name: Bug report
+description: Something is broken or behaving unexpectedly
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. A good bug report is
+        reproducible — please include enough detail for someone else to
+        trigger the same issue.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear and concise description of the bug.
+      placeholder: When I drag a channel from the "Основное" group into Main, …
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+      description: What should have happened instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Minimum steps to trigger the bug.
+      placeholder: |
+        1. Import playlist X
+        2. Expand "Основное" in the source panel
+        3. Drag channel Y into Main
+        4. See error …
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version / commit
+      description: Tag, commit SHA, or "main@HEAD"
+      placeholder: main@HEAD
+    validations:
+      required: true
+
+  - type: dropdown
+    id: runtime
+    attributes:
+      label: How are you running it?
+      options:
+        - Docker
+        - ./run.sh (local dev)
+        - Other (describe below)
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      placeholder: macOS 15.1, Ubuntu 24.04, Windows 11 …
+    validations:
+      required: true
+
+  - type: input
+    id: browser
+    attributes:
+      label: Browser
+      placeholder: Chrome 131, Safari 18.1, Firefox 133 …
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Server logs / browser console
+      description: Paste any relevant error output. Do NOT paste stream URLs with tokens.
+      render: shell
+
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues and this is not a duplicate
+          required: true
+        - label: I removed any provider tokens / credentials from the logs above
+          required: true

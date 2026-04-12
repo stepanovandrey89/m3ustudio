@@ -2,14 +2,25 @@
 
 > Local web studio for curating, previewing, and exporting m3u/m3u8 IPTV playlists.
 
+[![CI](https://github.com/stepanovandrey89/m3ustudio/actions/workflows/ci.yml/badge.svg)](https://github.com/stepanovandrey89/m3ustudio/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+[![Python](https://img.shields.io/badge/python-3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=white)](https://react.dev/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Tailwind CSS](https://img.shields.io/badge/Tailwind-4-38BDF8?logo=tailwindcss&logoColor=white)](https://tailwindcss.com/)
+[![Docker](https://img.shields.io/badge/docker-ready-2496ED?logo=docker&logoColor=white)](./Dockerfile)
+[![Self-Hosted](https://img.shields.io/badge/self--hosted-ready-%2344cc11)](https://github.com/awesome-selfhosted/awesome-selfhosted)
+
 ![m3u Studio workspace](docs/workspace.png)
 
 A self-hosted playlist editor with drag-and-drop reordering, live HLS preview,
 integrated EPG, automatic logo resolution, duplicate detection, and one-click
 export to a cleaned-up `.m3u8` file.
 
-Built as a small, fast, local-first tool: one `./run.sh` and you have a
-FastAPI backend + a React 19 frontend running side-by-side on your machine.
+Built as a small, fast, local-first tool: one `docker compose up` (or
+`./run.sh`) and you have a FastAPI backend + React 19 frontend running on
+your machine.
 
 ---
 
@@ -54,6 +65,24 @@ FastAPI backend + a React 19 frontend running side-by-side on your machine.
 ---
 
 ## Quick start
+
+### 🐳 Docker (recommended)
+
+```bash
+git clone https://github.com/stepanovandrey89/m3ustudio.git
+cd m3ustudio
+docker compose up -d
+```
+
+Open http://127.0.0.1:8000 — that's it. Your playlist, state and all
+caches are persisted under `./data/` next to the compose file.
+
+Drop your `.m3u8` file into `./data/playlist.m3u8` (or upload it from the
+UI via Settings → Import playlist) and start editing.
+
+Stop with `docker compose down`.
+
+### 💻 Local dev
 
 Requires Python 3.12+, `pnpm`, and (optionally) `ffmpeg` for audio transcode fallback.
 

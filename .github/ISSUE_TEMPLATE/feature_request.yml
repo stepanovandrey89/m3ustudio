@@ -1,0 +1,42 @@
+name: Feature request
+description: Suggest an idea or improvement
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting something! Please describe the problem first,
+        then the proposed solution — that way we can evaluate the idea even
+        if we end up implementing it differently.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: What are you trying to do that's currently awkward or impossible?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: How should it work from the user's point of view?
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Any workarounds you've tried or other tools that do this well?
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope
+      options:
+        - label: I searched existing issues and this is not a duplicate
+          required: true
+        - label: This feature fits the "local-first playlist editor" scope of the project
+          required: true
