@@ -56,7 +56,6 @@ Magic VHS HD
 Magic Adventure HD
 StrahTV VHS HD
 BCU VHS HD
-Блокбастер HD
 BCU Premiere 1 HD
 BCU Premiere HD
 BCU Premiere 2 HD
@@ -64,6 +63,7 @@ BCU Premiere 3 HD
 BCU Action HD
 BCU TruMotion HD
 BCU Comedy HD
+Блокбастер HD
 MM NewFilm RU HD
 MM NewFilm 1 HD
 MM NewFilm 2 HD
@@ -97,7 +97,6 @@ CineMan РуКино
 CineMan Ментовские войны
 CineMan Фитнес
 Magic Russian HD
-Мосфильм. Золотая коллекция HD
 Киносемья HD
 Кинокомедия HD
 VF Adventure
@@ -109,9 +108,10 @@ Yosso TV Русские Фильмы
 Liberty Комедии FHD
 Tviksel Кино 2 HD
 VeleS 60fps
-MM Live Planet HD
+Мосфильм. Золотая коллекция HD
 National Geographic HD
 Animal Planet HD
+MM Live Planet HD
 Liberty Планета360 FHD
 Big Planet HD
 Z!Travel HD
@@ -124,4 +124,10 @@ Travel Channel HD
 Охота и рыбалка
 Дикая рыбалка HD
 VF Рыбалка
-Dance TV Mainstream EDM
+Дом Кино Премиум HD
+Кион Хит HD
+Мужское Кино HD
+Футбол HD
+BCU Criminal HD
+BCU Russian HD
+Fast & Fun Box HD

@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
-import { CalendarClock, CircleDot, History, Loader2, Play, X } from 'lucide-react'
+import { CalendarClock, CircleDot, History, Loader2, Minus, Play, Plus, RotateCcw, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../lib/api'
 import { cn } from '../lib/cn'
@@ -15,6 +15,12 @@ import type { Programme } from '../types'
 interface EpgPanelProps {
   channelId: string
   catchupDays: number
+  /** The programme currently being watched from archive, if any. */
+  archiveProgramme?: Programme | null
+  /** EPG time offset in seconds (positive = EPG ahead of reality). */
+  epgOffsetSec?: number
+  /** Called when the offset changes (for persistence). */
+  onOffsetChange?: (sec: number) => void
   /** Called when the user double-clicks a past (or current) programme to replay it. */
   onPlayProgramme: (programme: Programme) => void
   /** Optional close handler — renders an × in the header that collapses the panel. */
@@ -23,7 +29,7 @@ interface EpgPanelProps {
 
 const TICK_INTERVAL_MS = 30_000
 
-export function EpgPanel({ channelId, catchupDays, onPlayProgramme, onClose }: EpgPanelProps) {
+export function EpgPanel({ channelId, catchupDays, archiveProgramme, epgOffsetSec = 0, onOffsetChange, onPlayProgramme, onClose }: EpgPanelProps) {
   const { data, isLoading } = useQuery({
     queryKey: ['epg', channelId],
     queryFn: () => api.getEpg(channelId),
@@ -36,6 +42,17 @@ export function EpgPanel({ channelId, catchupDays, onPlayProgramme, onClose }: E
     const id = window.setInterval(() => setNow(Date.now()), TICK_INTERVAL_MS)
     return () => window.clearInterval(id)
   }, [])
+
+  // Active index: when watching archive, highlight the clicked programme;
+  // otherwise use the server's live current_index.
+  // Must be called before any early return to satisfy Rules of Hooks.
+  const activeIndex = useMemo(() => {
+    if (archiveProgramme && data?.programmes) {
+      const idx = data.programmes.findIndex((p) => p.start === archiveProgramme.start)
+      if (idx !== -1) return idx
+    }
+    return data?.current_index ?? null
+  }, [archiveProgramme, data?.programmes, data?.current_index])
 
   const placeholder = (body: React.ReactNode) => (
     <Shell
@@ -86,10 +103,11 @@ export function EpgPanel({ channelId, catchupDays, onPlayProgramme, onClose }: E
   }
 
   return (
-    <Shell catchupDays={catchupDays} count={data.programmes.length} onClose={onClose}>
+    <Shell catchupDays={catchupDays} count={data.programmes.length} offsetSec={epgOffsetSec} onOffsetChange={onOffsetChange} onClose={onClose}>
       <FullDayList
         programmes={data.programmes}
-        currentIndex={data.current_index}
+        currentIndex={activeIndex}
+        isArchive={!!archiveProgramme}
         catchupDays={catchupDays}
         nowMs={now}
         onPlayProgramme={onPlayProgramme}
@@ -101,11 +119,13 @@ export function EpgPanel({ channelId, catchupDays, onPlayProgramme, onClose }: E
 interface ShellProps {
   catchupDays: number
   count: number
+  offsetSec?: number
+  onOffsetChange?: (sec: number) => void
   children: React.ReactNode
   onClose?: () => void
 }
 
-function Shell({ catchupDays, count, children, onClose }: ShellProps) {
+function Shell({ catchupDays, count, offsetSec = 0, onOffsetChange, children, onClose }: ShellProps) {
   return (
     <div className="flex h-full min-h-0 flex-col bg-black/20">
       <div className="flex shrink-0 items-center justify-between border-b border-white/5 px-4 py-3">
@@ -136,14 +156,51 @@ function Shell({ catchupDays, count, children, onClose }: ShellProps) {
           )}
         </div>
       </div>
+      {/* EPG time offset — always visible so the user can adjust before clicking a programme */}
+      {onOffsetChange && (
+        <div className="flex shrink-0 items-center justify-center gap-0.5 border-b border-white/5 px-3 py-1.5">
+          <button type="button" onClick={() => onOffsetChange(offsetSec + 900)}
+            className="flex h-5 w-5 items-center justify-center rounded-full text-fog-100/40 transition hover:bg-white/15 hover:text-white"
+            title="−15 min"><Minus className="h-3 w-3" /></button>
+          <button type="button" onClick={() => onOffsetChange(offsetSec + 300)}
+            className="flex h-5 w-5 items-center justify-center rounded-full text-fog-100/25 transition hover:bg-white/15 hover:text-white"
+            title="−5 min"><Minus className="h-2 w-2" /></button>
+          <span className={cn(
+            'min-w-[52px] text-center font-mono text-[10px] tabnum',
+            offsetSec !== 0 ? 'text-[var(--color-amber-primary)]' : 'text-fog-100/40',
+          )}>
+            {offsetSec === 0 ? 'offset' : offsetSec > 0 ? `−${fmtOffsetShort(offsetSec)}` : `+${fmtOffsetShort(-offsetSec)}`}
+          </span>
+          <button type="button" onClick={() => onOffsetChange(offsetSec - 300)}
+            className="flex h-5 w-5 items-center justify-center rounded-full text-fog-100/25 transition hover:bg-white/15 hover:text-white"
+            title="+5 min"><Plus className="h-2 w-2" /></button>
+          <button type="button" onClick={() => onOffsetChange(offsetSec - 900)}
+            className="flex h-5 w-5 items-center justify-center rounded-full text-fog-100/40 transition hover:bg-white/15 hover:text-white"
+            title="+15 min"><Plus className="h-3 w-3" /></button>
+          {offsetSec !== 0 && (
+            <button type="button" onClick={() => onOffsetChange(0)}
+              className="ml-0.5 flex h-5 w-5 items-center justify-center rounded-full text-fog-100/30 transition hover:bg-white/15 hover:text-white"
+              title="Reset"><RotateCcw className="h-2.5 w-2.5" /></button>
+          )}
+        </div>
+      )}
       {children}
     </div>
   )
 }
 
+function fmtOffsetShort(absSec: number): string {
+  const m = Math.round(Math.abs(absSec) / 60)
+  if (m < 60) return `${m}m`
+  const h = Math.floor(m / 60)
+  const rm = m % 60
+  return rm === 0 ? `${h}h` : `${h}h${rm}m`
+}
+
 interface FullDayListProps {
   programmes: Programme[]
   currentIndex: number | null
+  isArchive: boolean
   catchupDays: number
   nowMs: number
   onPlayProgramme: (programme: Programme) => void
@@ -152,6 +209,7 @@ interface FullDayListProps {
 function FullDayList({
   programmes,
   currentIndex,
+  isArchive,
   catchupDays,
   nowMs,
   onPlayProgramme,
@@ -187,10 +245,11 @@ function FullDayList({
               <ProgrammeRow
                 key={`${programme.start}-${index}`}
                 programme={programme}
-                kind={kind}
+                kind={index === currentIndex && isArchive ? 'current' : kind}
                 catchupDays={catchupDays}
                 nowMs={nowMs}
                 isCurrent={index === currentIndex}
+                isArchiveTarget={index === currentIndex && isArchive}
                 onPlay={() => onPlayProgramme(programme)}
                 rowRef={index === currentIndex ? currentRowRef : undefined}
               />
@@ -210,6 +269,8 @@ interface ProgrammeRowProps {
   catchupDays: number
   nowMs: number
   isCurrent: boolean
+  /** True when this row is the programme being played from archive. */
+  isArchiveTarget?: boolean
   onPlay: () => void
   rowRef?: React.Ref<HTMLLIElement>
 }
@@ -220,6 +281,7 @@ function ProgrammeRow({
   catchupDays,
   nowMs,
   isCurrent,
+  isArchiveTarget,
   onPlay,
   rowRef,
 }: ProgrammeRowProps) {
@@ -228,7 +290,8 @@ function ProgrammeRow({
   const startMs = new Date(programme.start).getTime()
   const stopMs = new Date(programme.stop).getTime()
   const duration = Math.max(1, stopMs - startMs)
-  const progress = isCurrent ? ((nowMs - startMs) / duration) * 100 : 0
+  // Archive target: show no progress (we just started watching).
+  const progress = isArchiveTarget ? 0 : isCurrent ? ((nowMs - startMs) / duration) * 100 : 0
 
   const handleClick = () => {
     if (canReplay) onPlay()
@@ -237,7 +300,6 @@ function ProgrammeRow({
   return (
     <motion.li
       ref={rowRef}
-      layout="position"
       onDoubleClick={handleClick}
       onClick={handleClick}
       className={cn(

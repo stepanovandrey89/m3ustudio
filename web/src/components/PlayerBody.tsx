@@ -21,7 +21,7 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../lib/api'
-import { buildArchiveUrl } from '../lib/archive'
+import { buildArchiveUrl, getEpgOffset, saveEpgOffset } from '../lib/archive'
 import { cn } from '../lib/cn'
 import { loadTranscodePrefs, saveTranscodePrefs } from '../lib/transcodePrefs'
 import { useIsMobile } from '../hooks/useIsMobile'
@@ -73,6 +73,7 @@ export function PlayerBody({
   const [error, setError] = useState<string | null>(null)
   const [isPlaying, setIsPlaying] = useState(false)
   const [archive, setArchive] = useState<Programme | null>(null)
+  const [epgOffset, setEpgOffset] = useState(() => getEpgOffset(channel.id))
   const [streamQuality, setStreamQuality] = useState<Quality | null>(null)
   const [nowPlayingOpen, setNowPlayingOpen] = useState(false)
   const [channelListOpen, setChannelListOpen] = useState(false)
@@ -104,9 +105,9 @@ export function PlayerBody({
 
   const streamUrl = useMemo(() => {
     if (transcodeOn && transcodeReady) return api.transcodeManifestUrl(channel.id)
-    if (archive) return buildArchiveUrl(channel.url, archive.start)
+    if (archive) return buildArchiveUrl(channel.url, archive.start, epgOffset)
     return channel.url
-  }, [transcodeOn, transcodeReady, archive, channel.id, channel.url])
+  }, [transcodeOn, transcodeReady, archive, channel.id, channel.url, epgOffset])
 
   const { prev, next } = useMemo(() => {
     const idx = list.findIndex((c) => c.id === channel.id)
@@ -121,6 +122,7 @@ export function PlayerBody({
     setArchive(null)
     setTranscodeReady(false)
     setStreamQuality(null)
+    setEpgOffset(getEpgOffset(channel.id))
   }, [channel.id])
 
   useEffect(() => {
@@ -421,8 +423,7 @@ export function PlayerBody({
                 title="Return to live"
               >
                 <History className="h-3 w-3" />
-                Archive · {fmtArchive(archive.start)}
-                <span className="ml-1 text-fog-100/60">× live</span>
+                Archive
               </motion.button>
             ) : (
               <motion.span
@@ -657,6 +658,9 @@ export function PlayerBody({
               <EpgPanel
                 channelId={channel.id}
                 catchupDays={channel.catchup_days}
+                archiveProgramme={archive}
+                epgOffsetSec={epgOffset}
+                onOffsetChange={(v) => { setEpgOffset(v); saveEpgOffset(channel.id, v) }}
                 onPlayProgramme={handlePlayProgramme}
                 onClose={onToggleEpg}
               />
@@ -676,6 +680,7 @@ export function PlayerBody({
 function fmtArchive(iso: string): string {
   return new Date(iso).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
 }
+
 
 function fmtRecTime(s: number): string {
   const m = Math.floor(s / 60)
