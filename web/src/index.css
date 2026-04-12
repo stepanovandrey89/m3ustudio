@@ -291,6 +291,22 @@
   }
 }
 
+/* Panel list reveal — a gradient mask that sweeps top-to-bottom,
+   progressively revealing the scroll content. Applied to the scroll
+   container, not individual rows, so there's no per-item jitter. */
+@keyframes list-reveal {
+  from { mask-size: 100% 0%; }
+  to   { mask-size: 100% 100%; }
+}
+
+.list-reveal {
+  mask-image: linear-gradient(to bottom, black, black);
+  mask-repeat: no-repeat;
+  mask-position: top;
+  mask-size: 100% 100%;
+  animation: list-reveal 0.5s ease-out both;
+}
+
 /* Skeleton shimmer effect */
 @keyframes shimmer {
   0% { background-position: -400px 0; }

@@ -106,7 +106,7 @@ export function MainPanel({
         </div>
       </div>
 
-      <div ref={setDropRef} className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-3 py-3">
+      <div ref={setDropRef} className="list-reveal scrollbar-thin min-h-0 flex-1 overflow-y-auto px-3 py-3">
         {channels.length === 0 ? (
           <EmptyState isOver={isSourceDragging && isOver} />
         ) : (
