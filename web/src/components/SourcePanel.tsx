@@ -83,7 +83,7 @@ export function SourcePanel({ groups, mainIds, onAdd, onPreview }: SourcePanelPr
   }
 
   return (
-    <section className="glass flex min-h-0 flex-col overflow-hidden rounded-2xl">
+    <section className="glass panel-enter flex min-h-0 flex-col overflow-hidden rounded-2xl">
       <div className="flex items-center justify-between border-b border-white/5 px-4 py-3">
         <div>
           <h2 className="font-display text-[9px] font-semibold uppercase tracking-[0.12em] text-fog-100/80">

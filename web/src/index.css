@@ -47,56 +47,57 @@
   :root[data-theme="light"] {
     color-scheme: light;
 
-    /* Editorial cream / white palette — high contrast, warm undertone. */
-    --color-ink-0: #f8f5ec;
-    --color-ink-50: #f1ecde;
-    --color-ink-100: #ffffff;
-    --color-ink-200: #faf6ea;
-    --color-ink-300: #e6dcc2;
-    --color-ink-400: #c4b791;
+    /* Muted warm-gray canvas so white panels pop with contrast.
+       Previously #f8f5ec (too bright) — now darker, cooler cream. */
+    --color-ink-0: #e8e4d8;
+    --color-ink-50: #ddd8ca;
+    --color-ink-100: #f6f4ee;
+    --color-ink-200: #eae6da;
+    --color-ink-300: #ccc5ad;
+    --color-ink-400: #a89e80;
 
-    /* Dark ink for text — readable even at reduced opacity. */
-    --color-fog-100: #5d5540;
-    --color-fog-200: #1c1a11;
+    /* Darker text — ensures readability at all opacity stops. */
+    --color-fog-100: #4a4234;
+    --color-fog-200: #161208;
     --color-fog-300: #0a0905;
 
-    /* Saturated accents — keep recognisable gold/teal identity. */
-    --color-indigo-primary: #a86b0a;
-    --color-indigo-soft: #884f00;
-    --color-cyan-primary: #0d7d74;
+    /* Saturated accents — warm gold + deep teal. */
+    --color-indigo-primary: #9a6208;
+    --color-indigo-soft: #7a4c00;
+    --color-cyan-primary: #0a6e66;
     --color-green-primary: #047857;
-    --color-rose-primary: #b91c45;
-    --color-amber-primary: #a45509;
+    --color-rose-primary: #a8163c;
+    --color-amber-primary: #8f4a06;
 
-    /* Background decoration — subtle, warm, non-competing with content. */
-    --app-gradient-a: rgba(168, 107, 10, 0.14);
-    --app-gradient-b: rgba(13, 125, 116, 0.08);
-    --app-gradient-c: rgba(168, 107, 10, 0.08);
-    --grid-stroke: rgba(168, 107, 10, 0.08);
+    /* Background decoration — subtle warmth, non-competing with content. */
+    --app-gradient-a: rgba(154, 98, 8, 0.10);
+    --app-gradient-b: rgba(10, 110, 102, 0.06);
+    --app-gradient-c: rgba(154, 98, 8, 0.06);
+    --grid-stroke: rgba(154, 98, 8, 0.06);
 
-    /* Opaque white panels with warm border — no transparency (reads weak on cream). */
-    --glass-bg: #ffffff;
-    --glass-strong-bg: #ffffff;
-    --glass-border: rgba(18, 14, 5, 0.08);
-    --glass-strong-border: rgba(18, 14, 5, 0.12);
+    /* Off-white panels with visible warm borders + subtle shadow. */
+    --glass-bg: rgba(246, 244, 238, 0.92);
+    --glass-strong-bg: #f6f4ee;
+    --glass-border: rgba(18, 14, 5, 0.14);
+    --glass-strong-border: rgba(18, 14, 5, 0.18);
 
-    /* Semantic tint tokens used by the utility overrides below. */
-    --tint-bg-xs:     rgba(18, 14, 5, 0.028);
-    --tint-bg-sm:     rgba(18, 14, 5, 0.042);
-    --tint-bg-md:     rgba(18, 14, 5, 0.065);
-    --tint-bg-lg:     rgba(18, 14, 5, 0.10);
-    --tint-bg-xl:     rgba(18, 14, 5, 0.15);
-    --tint-border-xs: rgba(18, 14, 5, 0.06);
-    --tint-border-sm: rgba(18, 14, 5, 0.09);
-    --tint-border-md: rgba(18, 14, 5, 0.13);
-    --tint-border-lg: rgba(18, 14, 5, 0.18);
-    --tint-border-xl: rgba(18, 14, 5, 0.24);
+    /* Tint tokens — higher opacity for visibility on bright surfaces. */
+    --tint-bg-xs:     rgba(18, 14, 5, 0.04);
+    --tint-bg-sm:     rgba(18, 14, 5, 0.06);
+    --tint-bg-md:     rgba(18, 14, 5, 0.09);
+    --tint-bg-lg:     rgba(18, 14, 5, 0.14);
+    --tint-bg-xl:     rgba(18, 14, 5, 0.20);
+    --tint-border-xs: rgba(18, 14, 5, 0.10);
+    --tint-border-sm: rgba(18, 14, 5, 0.14);
+    --tint-border-md: rgba(18, 14, 5, 0.18);
+    --tint-border-lg: rgba(18, 14, 5, 0.24);
+    --tint-border-xl: rgba(18, 14, 5, 0.30);
 
-    /* Menu / dropdown surface — pure white with warm shadow. */
-    --menu-bg: #ffffff;
+    /* Menu / dropdown surface. */
+    --menu-bg: #f6f4ee;
     --menu-shadow:
-      0 24px 56px -20px rgba(18, 14, 5, 0.24),
-      0 0 0 1px rgba(18, 14, 5, 0.06);
+      0 24px 56px -20px rgba(18, 14, 5, 0.28),
+      0 0 0 1px rgba(18, 14, 5, 0.10);
   }
 
   :root:not([data-theme="light"]) {
@@ -191,12 +192,22 @@
 [data-theme="light"] .hover\:border-white\/25:hover { border-color: var(--tint-border-xl); }
 [data-theme="light"] .hover\:\!border-white\/20:hover { border-color: var(--tint-border-lg) !important; }
 
+/* Glass panels need shadow in light mode for depth separation. */
+[data-theme="light"] .glass {
+  box-shadow:
+    0 2px 12px -4px rgba(18, 14, 5, 0.10),
+    0 1px 3px -1px rgba(18, 14, 5, 0.06);
+}
+[data-theme="light"] .glass-strong {
+  box-shadow:
+    0 4px 16px -4px rgba(18, 14, 5, 0.12),
+    0 1px 4px -1px rgba(18, 14, 5, 0.08);
+}
+
 /* The settings dropdown hardcodes a dark-only background color. */
 [data-theme="light"] .bg-\[\#181620\] {
-  background-color: #ffffff;
-  box-shadow:
-    0 24px 56px -20px rgba(18, 14, 5, 0.22),
-    0 0 0 1px rgba(18, 14, 5, 0.06);
+  background-color: var(--menu-bg);
+  box-shadow: var(--menu-shadow);
 }
 
 /* Modal backdrops — a touch softer in light mode. */
@@ -278,6 +289,22 @@
   .scrollbar-none::-webkit-scrollbar {
     display: none;
   }
+}
+
+/* Panel fade-in on mount — replaces per-row framer-motion which jitters
+   with 100+ items. CSS animation fires once on mount and doesn't affect
+   subsequent re-renders. */
+@keyframes panel-enter {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.panel-enter {
+  animation: panel-enter 0.45s ease-out both;
+}
+
+.panel-enter-delay {
+  animation: panel-enter 0.45s ease-out 0.08s both;
 }
 
 /* Skeleton shimmer effect */

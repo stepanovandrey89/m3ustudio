@@ -48,7 +48,7 @@ export function MainPanel({
   return (
     <section
       className={cn(
-        'glass flex min-h-0 flex-col overflow-hidden rounded-2xl transition-all duration-200',
+        'glass panel-enter-delay flex min-h-0 flex-col overflow-hidden rounded-2xl transition-all duration-200',
         isSourceDragging && 'ring-2 ring-[var(--color-indigo-primary)]/40',
         isSourceDragging && isOver && 'ring-[var(--color-indigo-primary)]/80 shadow-[0_0_32px_-4px_rgba(212,165,86,0.3)]',
       )}

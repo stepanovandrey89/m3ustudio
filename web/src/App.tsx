@@ -372,27 +372,10 @@ function App() {
             ? 'px-2 pt-2'
             : 'mx-auto w-full max-w-5xl px-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]',
         )}>
-          <AnimatePresence mode="wait">
           {isLoading ? (
-            <motion.div
-              key="skeleton"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0, scale: 0.98 }}
-              transition={{ duration: 0.3 }}
-              className="contents"
-            >
-              <LoadingPlaceholder />
-            </motion.div>
+            <LoadingPlaceholder />
           ) : isMobile ? (
-            <motion.div
-              key="mobile-content"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ duration: 0.4, delay: 0.05 }}
-              className="contents"
-            >
-            {activeTab === 'source' ? (
+            activeTab === 'source' ? (
               <SourcePanel
                 groups={source.data?.groups ?? {}}
                 mainIds={mainIds}
@@ -412,16 +395,9 @@ function App() {
                 onPreview={openFromMain}
                 isSourceDragging={activeDragType === 'source-channel'}
               />
-            )}
-            </motion.div>
+            )
           ) : (
-            <motion.div
-              key="desktop-content"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ duration: 0.4, delay: 0.05 }}
-              className="contents"
-            >
+            <>
               <SourcePanel
                 groups={source.data?.groups ?? {}}
                 mainIds={mainIds}
@@ -440,9 +416,8 @@ function App() {
                 onPreview={openFromMain}
                 isSourceDragging={activeDragType === 'source-channel'}
               />
-            </motion.div>
+            </>
           )}
-          </AnimatePresence>
         </main>
       </DndContext>
 
