@@ -215,8 +215,7 @@ function SortableRow({
       ref={setNodeRef}
       style={style}
       layout
-      initial={{ opacity: 0, y: 6 }}
-      animate={{ opacity: 1, y: 0 }}
+      initial={false}
       exit={{ opacity: 0, scale: 0.96 }}
       transition={{ duration: 0.18 }}
       onDoubleClick={multiMode ? undefined : onPreview}

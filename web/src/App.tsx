@@ -372,10 +372,27 @@ function App() {
             ? 'px-2 pt-2'
             : 'mx-auto w-full max-w-5xl px-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]',
         )}>
+          <AnimatePresence mode="wait">
           {isLoading ? (
-            <LoadingPlaceholder />
+            <motion.div
+              key="skeleton"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0, scale: 0.98 }}
+              transition={{ duration: 0.3 }}
+              className="contents"
+            >
+              <LoadingPlaceholder />
+            </motion.div>
           ) : isMobile ? (
-            activeTab === 'source' ? (
+            <motion.div
+              key="mobile-content"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ duration: 0.4, delay: 0.05 }}
+              className="contents"
+            >
+            {activeTab === 'source' ? (
               <SourcePanel
                 groups={source.data?.groups ?? {}}
                 mainIds={mainIds}
@@ -395,9 +412,16 @@ function App() {
                 onPreview={openFromMain}
                 isSourceDragging={activeDragType === 'source-channel'}
               />
-            )
+            )}
+            </motion.div>
           ) : (
-            <>
+            <motion.div
+              key="desktop-content"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ duration: 0.4, delay: 0.05 }}
+              className="contents"
+            >
               <SourcePanel
                 groups={source.data?.groups ?? {}}
                 mainIds={mainIds}
@@ -416,8 +440,9 @@ function App() {
                 onPreview={openFromMain}
                 isSourceDragging={activeDragType === 'source-channel'}
               />
-            </>
+            </motion.div>
           )}
+          </AnimatePresence>
         </main>
       </DndContext>
 
@@ -498,11 +523,114 @@ function MobileTab({ active, label, count, onClick, children }: MobileTabProps) 
   )
 }
 
+function SkeletonLine({ w = 'w-full', delay = 0 }: { w?: string; delay?: number }) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, x: -8 }}
+      animate={{ opacity: 1, x: 0 }}
+      transition={{ duration: 0.4, delay }}
+      className={cn('h-3 rounded-full bg-white/[0.07]', w)}
+    />
+  )
+}
+
+function SkeletonRow({ delay = 0 }: { delay?: number }) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.35, delay }}
+      className="skeleton-shimmer flex items-center gap-3 rounded-xl border border-white/[0.04] bg-white/[0.02] px-3 py-2.5"
+    >
+      <div className="h-8 w-8 shrink-0 rounded-lg bg-white/[0.06]" />
+      <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+        <SkeletonLine w="w-3/5" delay={delay + 0.05} />
+        <SkeletonLine w="w-2/5" delay={delay + 0.1} />
+      </div>
+    </motion.div>
+  )
+}
+
+function SkeletonGroup({ label, rows, delay = 0 }: { label: string; rows: number; delay?: number }) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 16 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.5, delay }}
+    >
+      <div className="mb-2 flex items-center gap-2 px-2">
+        <div className="h-3 w-3 rounded bg-white/[0.06]" />
+        <motion.span
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 0.35 }}
+          transition={{ duration: 0.6, delay: delay + 0.15 }}
+          className="text-[11px] font-semibold uppercase tracking-[0.12em] text-fog-100"
+        >
+          {label}
+        </motion.span>
+        <div className="ml-auto h-3 w-6 rounded-full bg-white/[0.05]" />
+      </div>
+      <div className="space-y-1.5">
+        {Array.from({ length: rows }, (_, i) => (
+          <SkeletonRow key={i} delay={delay + 0.08 * i} />
+        ))}
+      </div>
+    </motion.div>
+  )
+}
+
 function LoadingPlaceholder() {
   return (
     <>
-      <div className="glass animate-pulse rounded-2xl" />
-      <div className="glass animate-pulse rounded-2xl" />
+      {/* Source skeleton */}
+      <motion.div
+        initial={{ opacity: 0, scale: 0.97 }}
+        animate={{ opacity: 1, scale: 1 }}
+        transition={{ duration: 0.5 }}
+        className="glass flex min-h-0 flex-col overflow-hidden rounded-2xl"
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between border-b border-white/5 px-4 py-3">
+          <div className="flex flex-col gap-1.5">
+            <SkeletonLine w="w-14" delay={0.1} />
+            <SkeletonLine w="w-20" delay={0.15} />
+          </div>
+          <div className="h-4 w-12 rounded-full bg-white/[0.05]" />
+        </div>
+        {/* Search */}
+        <div className="border-b border-white/5 px-3 py-3">
+          <div className="h-9 rounded-lg border border-white/[0.06] bg-white/[0.02]" />
+        </div>
+        {/* Groups */}
+        <div className="space-y-4 px-3 py-3">
+          <SkeletonGroup label="loading" rows={3} delay={0.15} />
+          <SkeletonGroup label="" rows={2} delay={0.35} />
+          <SkeletonGroup label="" rows={2} delay={0.5} />
+        </div>
+      </motion.div>
+
+      {/* Main skeleton */}
+      <motion.div
+        initial={{ opacity: 0, scale: 0.97 }}
+        animate={{ opacity: 1, scale: 1 }}
+        transition={{ duration: 0.5, delay: 0.1 }}
+        className="glass flex min-h-0 flex-col overflow-hidden rounded-2xl"
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between border-b border-white/5 px-4 py-3">
+          <div className="flex flex-col gap-1.5">
+            <SkeletonLine w="w-10" delay={0.2} />
+            <SkeletonLine w="w-24" delay={0.25} />
+          </div>
+          <div className="h-4 w-16 rounded-full bg-white/[0.05]" />
+        </div>
+        {/* Rows */}
+        <div className="space-y-1.5 px-3 py-3">
+          {Array.from({ length: 7 }, (_, i) => (
+            <SkeletonRow key={i} delay={0.2 + 0.06 * i} />
+          ))}
+        </div>
+      </motion.div>
     </>
   )
 }
