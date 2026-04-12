@@ -296,15 +296,15 @@
    container, not individual rows, so there's no per-item jitter. */
 @keyframes list-reveal {
   from { mask-size: 100% 0%; }
-  to   { mask-size: 100% 100%; }
+  to   { mask-size: 100% 150%; }
 }
 
 .list-reveal {
-  mask-image: linear-gradient(to bottom, black, black);
+  mask-image: linear-gradient(to bottom, black 60%, transparent 100%);
   mask-repeat: no-repeat;
   mask-position: top;
-  mask-size: 100% 100%;
-  animation: list-reveal 0.5s ease-out both;
+  mask-size: 100% 150%;
+  animation: list-reveal 0.8s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 /* Skeleton shimmer effect */
