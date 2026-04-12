@@ -11,6 +11,7 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { CheckSquare, GripVertical, Sparkles, Square, Trash2, X } from 'lucide-react'
 import { useCallback, useMemo, useRef } from 'react'
 import { cn } from '../lib/cn'
+import { useIsMobile } from '../hooks/useIsMobile'
 import type { Channel } from '../types'
 import { ChannelLogo } from './ChannelLogo'
 
@@ -41,6 +42,7 @@ export function MainPanel({
   onPreview,
   isSourceDragging,
 }: MainPanelProps) {
+  const isMobile = useIsMobile()
   const ids = useMemo(() => channels.map((ch) => ch.id), [channels])
 
   const { setNodeRef: setDropRef, isOver } = useDroppable({ id: 'main-panel' })
@@ -62,13 +64,13 @@ export function MainPanel({
             <p className="mt-1 font-mono text-[10px] text-[var(--color-cyan-primary)]/80">
               selected {selected.size} / {channels.length}
             </p>
-          ) : (
+          ) : !isMobile ? (
             <p className="mt-1 font-mono text-[10px] text-fog-100/50">
               {isSourceDragging
                 ? 'drop to add'
                 : 'hold to select · drag to reorder'}
             </p>
-          )}
+          ) : null}
         </div>
 
         <div className="flex items-center gap-2">
@@ -96,7 +98,7 @@ export function MainPanel({
               Done
             </motion.button>
           )}
-          {!multiMode && (
+          {!multiMode && !isMobile && (
             <div className="tabnum font-mono text-[11px] text-fog-100/60">
               {channels.length} <span className="text-fog-100/40">channels in favorites</span>
             </div>

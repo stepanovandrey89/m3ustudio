@@ -369,7 +369,7 @@ function App() {
         <main className={cn(
           'min-h-0 flex-1',
           isMobile
-            ? 'px-2 pt-2'
+            ? 'flex flex-col overflow-hidden px-2 pt-2'
             : 'mx-auto w-full max-w-5xl px-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]',
         )}>
           {isLoading ? (
