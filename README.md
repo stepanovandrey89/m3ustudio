@@ -2,6 +2,8 @@
 
 > Local web studio for curating, previewing, and exporting m3u/m3u8 IPTV playlists.
 
+![m3u Studio workspace](docs/workspace.png)
+
 A self-hosted playlist editor with drag-and-drop reordering, live HLS preview,
 integrated EPG, automatic logo resolution, duplicate detection, and one-click
 export to a cleaned-up `.m3u8` file.
