@@ -1,0 +1,39 @@
+# ── Playlist & media files ──────────────────────────────────────────────────
+*.m3u
+*.m3u8
+
+# ── Caches & runtime data ────────────────────────────────────────────────────
+logos_cache/
+epg_cache/
+transcode_tmp/
+state.json
+
+# ── Python ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+*.egg-info/
+dist/
+build/
+*.egg
+.mypy_cache/
+.ruff_cache/
+
+# ── Node / frontend ──────────────────────────────────────────────────────────
+web/node_modules/
+web/dist/
+web/.vite/
+
+# ── Environment & secrets ─────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── Editor & OS ──────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/

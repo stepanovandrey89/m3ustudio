@@ -1,0 +1,286 @@
+@import "tailwindcss";
+
+/* ------------------------------------------------------------------
+   m3u Studio — Broadcast design system
+   dark luxury • warm gold + teal • tabular numerics
+------------------------------------------------------------------ */
+
+@theme {
+  --font-sans: "Onest", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Unbounded", "Onest", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --color-ink-0: #05060a;
+  --color-ink-50: #0b0b11;
+  --color-ink-100: #121118;
+  --color-ink-200: #1c1a24;
+  --color-ink-300: #272535;
+  --color-ink-400: #38354c;
+
+  --color-fog-100: #9ba3b8;
+  --color-fog-200: #d1d5e3;
+  --color-fog-300: #e5e7f0;
+
+  --color-indigo-primary: #d4a556;
+  --color-indigo-soft: #b88840;
+  --color-cyan-primary: #2dd4bf;
+  --color-green-primary: #10b981;
+  --color-rose-primary: #f43f5e;
+  --color-amber-primary: #f59e0b;
+}
+
+@layer base {
+  :root {
+    color-scheme: dark;
+
+    /* App-specific (non-Tailwind) tokens that vary with theme. */
+    --app-gradient-a: rgba(212, 165, 86, 0.28);
+    --app-gradient-b: rgba(45, 212, 191, 0.20);
+    --app-gradient-c: rgba(212, 165, 86, 0.14);
+    --grid-stroke: rgba(212, 165, 86, 0.10);
+    --glass-bg: color-mix(in srgb, var(--color-ink-100) 42%, transparent);
+    --glass-strong-bg: color-mix(in srgb, var(--color-ink-100) 60%, transparent);
+    --glass-border: color-mix(in srgb, var(--color-fog-100) 9%, transparent);
+    --glass-strong-border: color-mix(in srgb, var(--color-fog-100) 11%, transparent);
+  }
+
+  :root[data-theme="light"] {
+    color-scheme: light;
+
+    /* Editorial cream / white palette — high contrast, warm undertone. */
+    --color-ink-0: #f8f5ec;
+    --color-ink-50: #f1ecde;
+    --color-ink-100: #ffffff;
+    --color-ink-200: #faf6ea;
+    --color-ink-300: #e6dcc2;
+    --color-ink-400: #c4b791;
+
+    /* Dark ink for text — readable even at reduced opacity. */
+    --color-fog-100: #5d5540;
+    --color-fog-200: #1c1a11;
+    --color-fog-300: #0a0905;
+
+    /* Saturated accents — keep recognisable gold/teal identity. */
+    --color-indigo-primary: #a86b0a;
+    --color-indigo-soft: #884f00;
+    --color-cyan-primary: #0d7d74;
+    --color-green-primary: #047857;
+    --color-rose-primary: #b91c45;
+    --color-amber-primary: #a45509;
+
+    /* Background decoration — subtle, warm, non-competing with content. */
+    --app-gradient-a: rgba(168, 107, 10, 0.14);
+    --app-gradient-b: rgba(13, 125, 116, 0.08);
+    --app-gradient-c: rgba(168, 107, 10, 0.08);
+    --grid-stroke: rgba(168, 107, 10, 0.08);
+
+    /* Opaque white panels with warm border — no transparency (reads weak on cream). */
+    --glass-bg: #ffffff;
+    --glass-strong-bg: #ffffff;
+    --glass-border: rgba(18, 14, 5, 0.08);
+    --glass-strong-border: rgba(18, 14, 5, 0.12);
+
+    /* Semantic tint tokens used by the utility overrides below. */
+    --tint-bg-xs:     rgba(18, 14, 5, 0.028);
+    --tint-bg-sm:     rgba(18, 14, 5, 0.042);
+    --tint-bg-md:     rgba(18, 14, 5, 0.065);
+    --tint-bg-lg:     rgba(18, 14, 5, 0.10);
+    --tint-bg-xl:     rgba(18, 14, 5, 0.15);
+    --tint-border-xs: rgba(18, 14, 5, 0.06);
+    --tint-border-sm: rgba(18, 14, 5, 0.09);
+    --tint-border-md: rgba(18, 14, 5, 0.13);
+    --tint-border-lg: rgba(18, 14, 5, 0.18);
+    --tint-border-xl: rgba(18, 14, 5, 0.24);
+
+    /* Menu / dropdown surface — pure white with warm shadow. */
+    --menu-bg: #ffffff;
+    --menu-shadow:
+      0 24px 56px -20px rgba(18, 14, 5, 0.24),
+      0 0 0 1px rgba(18, 14, 5, 0.06);
+  }
+
+  :root:not([data-theme="light"]) {
+    --menu-bg: #181620;
+    --menu-shadow: 0 24px 48px -16px rgba(0, 0, 0, 0.5);
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+    margin: 0;
+  }
+
+  body {
+    background:
+      radial-gradient(ellipse 70% 55% at 5% 5%,   var(--app-gradient-a), transparent),
+      radial-gradient(ellipse 60% 50% at 95% 95%, var(--app-gradient-b), transparent),
+      radial-gradient(ellipse 45% 40% at 65% 25%, var(--app-gradient-c), transparent),
+      var(--color-ink-0);
+    color: var(--color-fog-300);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    overflow: hidden;
+  }
+
+  button {
+    cursor: pointer;
+    font-family: inherit;
+  }
+
+  input[type="text"],
+  input[type="search"] {
+    font-family: inherit;
+  }
+
+  ::selection {
+    background: color-mix(in srgb, var(--color-indigo-primary) 40%, transparent);
+    color: var(--color-fog-300);
+  }
+}
+
+/* ------------------------------------------------------------------
+   Light theme — utility overrides
+   The app was originally authored dark-only, so many components use
+   hardcoded `text-white` / `bg-white/X` / `border-white/X` classes.
+   In light mode those produce invisible white-on-white surfaces, so
+   we remap them here to dark-tinted equivalents while preserving the
+   layering contrast the original design relies on.
+   ------------------------------------------------------------------ */
+
+[data-theme="light"] .text-white                  { color: var(--color-fog-300); }
+[data-theme="light"] .hover\:text-white:hover     { color: var(--color-fog-300); }
+[data-theme="light"] .text-fog-200                { color: var(--color-fog-200); }
+[data-theme="light"] .hover\:text-fog-200:hover   { color: var(--color-fog-200); }
+
+/* Backgrounds — opacity-based white tints → neutral dark tints. */
+[data-theme="light"] .bg-white\/5                 { background-color: var(--tint-bg-sm); }
+[data-theme="light"] .bg-white\/10                { background-color: var(--tint-bg-md); }
+[data-theme="light"] .bg-white\/15                { background-color: var(--tint-bg-lg); }
+[data-theme="light"] .bg-white\/20                { background-color: var(--tint-bg-xl); }
+[data-theme="light"] .bg-white\/\[0\.025\]        { background-color: var(--tint-bg-xs); }
+[data-theme="light"] .bg-white\/\[0\.03\]         { background-color: var(--tint-bg-xs); }
+[data-theme="light"] .bg-white\/\[0\.04\]         { background-color: var(--tint-bg-sm); }
+[data-theme="light"] .bg-white\/\[0\.05\]         { background-color: var(--tint-bg-sm); }
+[data-theme="light"] .bg-white\/\[0\.07\]         { background-color: var(--tint-bg-md); }
+[data-theme="light"] .bg-white\/\[0\.08\]         { background-color: var(--tint-bg-md); }
+
+[data-theme="light"] .hover\:bg-white\/5:hover    { background-color: var(--tint-bg-sm); }
+[data-theme="light"] .hover\:bg-white\/10:hover   { background-color: var(--tint-bg-md); }
+[data-theme="light"] .hover\:bg-white\/\[0\.03\]:hover { background-color: var(--tint-bg-xs); }
+[data-theme="light"] .hover\:bg-white\/\[0\.04\]:hover { background-color: var(--tint-bg-sm); }
+[data-theme="light"] .hover\:bg-white\/\[0\.05\]:hover { background-color: var(--tint-bg-sm); }
+[data-theme="light"] .hover\:bg-white\/\[0\.07\]:hover { background-color: var(--tint-bg-md); }
+
+/* Borders. */
+[data-theme="light"] .border-white\/5             { border-color: var(--tint-border-xs); }
+[data-theme="light"] .border-white\/10            { border-color: var(--tint-border-sm); }
+[data-theme="light"] .border-white\/15            { border-color: var(--tint-border-md); }
+[data-theme="light"] .border-white\/20            { border-color: var(--tint-border-lg); }
+[data-theme="light"] .border-white\/25            { border-color: var(--tint-border-lg); }
+[data-theme="light"] .border-white\/\[0\.05\]     { border-color: var(--tint-border-xs); }
+[data-theme="light"] .border-white\/\[0\.06\]     { border-color: var(--tint-border-xs); }
+[data-theme="light"] .border-white\/\[0\.07\]     { border-color: var(--tint-border-xs); }
+[data-theme="light"] .border-white\/\[0\.09\]     { border-color: var(--tint-border-sm); }
+[data-theme="light"] .border-white\/\[0\.14\]     { border-color: var(--tint-border-md); }
+
+[data-theme="light"] .hover\:border-white\/10:hover { border-color: var(--tint-border-sm); }
+[data-theme="light"] .hover\:border-white\/15:hover { border-color: var(--tint-border-md); }
+[data-theme="light"] .hover\:border-white\/20:hover { border-color: var(--tint-border-lg); }
+[data-theme="light"] .hover\:border-white\/25:hover { border-color: var(--tint-border-xl); }
+[data-theme="light"] .hover\:\!border-white\/20:hover { border-color: var(--tint-border-lg) !important; }
+
+/* The settings dropdown hardcodes a dark-only background color. */
+[data-theme="light"] .bg-\[\#181620\] {
+  background-color: #ffffff;
+  box-shadow:
+    0 24px 56px -20px rgba(18, 14, 5, 0.22),
+    0 0 0 1px rgba(18, 14, 5, 0.06);
+}
+
+/* Modal backdrops — a touch softer in light mode. */
+[data-theme="light"] .bg-black\/60 { background-color: rgba(18, 14, 5, 0.42); }
+
+/* EPG panel subtle background. */
+[data-theme="light"] .bg-black\/20 { background-color: rgba(18, 14, 5, 0.03); }
+
+/* Dim the decorative floating ellipses in light mode so they don't
+   fight the content. */
+[data-theme="light"] .pointer-events-none svg rect { opacity: 0.55; }
+
+/* Keep saturated badge text readable. */
+[data-theme="light"] .bg-amber-500 .text-black,
+[data-theme="light"] .text-black { color: #0a0905; }
+
+
+@layer components {
+  .glass {
+    background: var(--glass-bg);
+    backdrop-filter: blur(20px) saturate(150%);
+    -webkit-backdrop-filter: blur(20px) saturate(150%);
+    border: 1px solid var(--glass-border);
+  }
+
+  .glass-strong {
+    background: var(--glass-strong-bg);
+    backdrop-filter: blur(28px) saturate(160%);
+    -webkit-backdrop-filter: blur(28px) saturate(160%);
+    border: 1px solid var(--glass-strong-border);
+  }
+
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.15rem 0.55rem;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--color-indigo-primary) 14%, transparent);
+    color: color-mix(in srgb, var(--color-indigo-primary) 90%, white);
+    font-size: 0.72rem;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    border: 1px solid color-mix(in srgb, var(--color-indigo-primary) 22%, transparent);
+  }
+
+  .tabnum {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@layer utilities {
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background: color-mix(in srgb, var(--color-fog-100) 13%, transparent);
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in srgb, var(--color-fog-100) 28%, transparent);
+    background-clip: content-box;
+  }
+
+  .mask-fade-b {
+    mask-image: linear-gradient(to bottom, black 85%, transparent 100%);
+  }
+
+  .scrollbar-none {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* Hide native video fullscreen button — we use our own */
+video::-webkit-media-controls-fullscreen-button {
+  display: none !important;
+}
