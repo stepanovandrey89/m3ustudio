@@ -204,8 +204,10 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def _startup() -> None:
+    # Fresh install / after clear: create an empty valid playlist so the
+    # server can boot and the user can import one from the UI.
     if not PLAYLIST_PATH.exists():
-        raise RuntimeError(f"Source playlist not found: {PLAYLIST_PATH}")
+        PLAYLIST_PATH.write_text("#EXTM3U\n", encoding="utf-8")
     _state.reload_playlist()
     # iptv-org index download is best-effort and doesn't block startup on failure.
     with contextlib.suppress(Exception):  # deliberately swallow network errors
