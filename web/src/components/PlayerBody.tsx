@@ -677,9 +677,6 @@ export function PlayerBody({
 // Shared helpers
 // ---------------------------------------------------------------------------
 
-function fmtArchive(iso: string): string {
-  return new Date(iso).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
-}
 
 
 function fmtRecTime(s: number): string {
