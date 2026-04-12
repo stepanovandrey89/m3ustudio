@@ -7,16 +7,27 @@ which change across providers; names are stable.
 
 Storage: JSON file, atomic write on every mutation.
 
-File format:
-    {"version": 2, "main_names": ["Первый канал HD", ...]}
+File format (v3):
+    {
+        "version": 3,
+        "main_names": ["Первый канал HD", ...],
+        "original_groups": {"<channel_id>": "<group name>", ...}
+    }
 
-Legacy v1 state ({"version": 1, "main_ids": [...]}) is migrated to v2 by
-looking up each id in the currently-parsed playlist and writing back the
-matching names.
+`original_groups` is a snapshot of each channel's original group-title —
+the one it had when first imported, BEFORE we rewrote it to "основное" as
+part of Main/Source mirroring. When a channel is later removed from Main,
+the rewriter uses this snapshot to restore it to its real group instead
+of leaving it stuck in "основное" as a ghost entry.
+
+Legacy v1 ({"version": 1, "main_ids": [...]}) and v2 ({"version": 2,
+"main_names": [...]}) state files are migrated on load. v1 looks up each
+id in the currently-parsed playlist and writes back the matching names.
+v2 just adds an empty `original_groups` which is then populated from a
+fresh snapshot of the current playlist.
 
 First-run bootstrap: if the state file is missing entirely, the initial
-main list is seeded from DEFAULT_ORDERED_NAMES (the same list that drives
-sort_playlist_osnovnoe.py).
+main list is seeded from the configured default channel names list.
 """
 
 from __future__ import annotations
@@ -35,9 +46,6 @@ class MainState:
     """Immutable snapshot of the curated main-group ordering."""
 
     main_names: tuple[str, ...]
-
-    def to_json(self) -> dict:
-        return {"version": 2, "main_names": list(self.main_names)}
 
 
 def _dedupe(names: list[str]) -> list[str]:
@@ -68,6 +76,11 @@ class StateStore:
         self._default_names: tuple[str, ...] = (
             default_names if default_names is not None else DEFAULT_ORDERED_NAMES
         )
+        # Snapshot of each channel's original group-title, keyed by channel id.
+        # Populated on import / bootstrap, and extended (never overwritten)
+        # when new channels appear. Used by build_with_main_group to restore
+        # removed-from-Main channels to their real groups.
+        self._original_groups: dict[str, str] = {}
 
     def set_default_names(self, names: tuple[str, ...]) -> None:
         """Update the bootstrap defaults used when state.json is absent."""
@@ -82,6 +95,38 @@ class StateStore:
         """
         with self._lock:
             self._playlist = playlist
+
+    # ---- Original-group snapshot ----------------------------------------
+
+    def original_groups_map(self) -> dict[str, str]:
+        """Return a copy of the id → original group snapshot."""
+        with self._lock:
+            return dict(self._original_groups)
+
+    def capture_original_groups(self, playlist: Playlist) -> None:
+        """Extend the snapshot with any channels that aren't tracked yet.
+
+        Non-destructive: never overwrites existing entries, so group-title
+        rewrites from `_sync_main_to_source` don't clobber historical data.
+        """
+        with self._lock:
+            changed = False
+            for ch in playlist.channels:
+                if ch.id not in self._original_groups:
+                    self._original_groups[ch.id] = ch.group
+                    changed = True
+            if changed:
+                self._persist_unlocked()
+
+    def reset_original_groups(self, playlist: Playlist) -> None:
+        """Discard the existing snapshot and take a fresh one.
+
+        Called when a brand-new playlist is imported — the old provider's
+        ids / groups no longer apply and must be replaced wholesale.
+        """
+        with self._lock:
+            self._original_groups = {ch.id: ch.group for ch in playlist.channels}
+            self._persist_unlocked()
 
     @property
     def state(self) -> MainState:
@@ -133,26 +178,48 @@ class StateStore:
                 if isinstance(data, dict):
                     version = data.get("version")
 
-                    if version == 2 and isinstance(data.get("main_names"), list):
+                    if version == 3 and isinstance(data.get("main_names"), list):
                         self._state = MainState(
                             main_names=tuple(str(n) for n in data["main_names"] if n)
                         )
+                        raw_groups = data.get("original_groups") or {}
+                        if isinstance(raw_groups, dict):
+                            self._original_groups = {
+                                str(k): str(v) for k, v in raw_groups.items() if k and v
+                            }
+                        return self._state
+
+                    if version == 2 and isinstance(data.get("main_names"), list):
+                        # v2 → v3 migration: preserve main_names verbatim and take
+                        # a snapshot of the current playlist as the original-group
+                        # source of truth. Caveat: any channels that are already
+                        # tagged "основное" in the source file will keep that as
+                        # their "original" group — re-importing the playlist will
+                        # give a fully accurate snapshot.
+                        self._state = MainState(
+                            main_names=tuple(str(n) for n in data["main_names"] if n)
+                        )
+                        self._original_groups = {ch.id: ch.group for ch in playlist.channels}
+                        self._persist_unlocked()
                         return self._state
 
                     if version == 1 and isinstance(data.get("main_ids"), list):
-                        # v1 → v2 migration: look up each id's current name.
+                        # v1 → v3 migration: look up each id's current name and
+                        # take a fresh original-groups snapshot.
                         id_to_name = self._id_to_name_map()
                         names = [id_to_name[i] for i in data["main_ids"] if i in id_to_name]
                         self._state = MainState(main_names=tuple(_dedupe(names)))
+                        self._original_groups = {ch.id: ch.group for ch in playlist.channels}
                         self._persist_unlocked()
                         return self._state
 
             # Bootstrap from the configured default names — only keep names that
-            # actually exist in the current playlist, preserving the
-            # canonical order.
+            # actually exist in the current playlist, preserving the canonical
+            # order. Also take an initial original-groups snapshot.
             present = {ch.name for ch in playlist.channels}
             seeded = [name for name in self._default_names if name in present]
             self._state = MainState(main_names=tuple(seeded))
+            self._original_groups = {ch.id: ch.group for ch in playlist.channels}
             self._persist_unlocked()
             return self._state
 
@@ -208,9 +275,14 @@ class StateStore:
 
     def _persist_unlocked(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "version": 3,
+            "main_names": list(self._state.main_names),
+            "original_groups": dict(self._original_groups),
+        }
         tmp = self._path.with_suffix(self._path.suffix + ".tmp")
         tmp.write_text(
-            json.dumps(self._state.to_json(), ensure_ascii=False, indent=2),
+            json.dumps(payload, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
         tmp.replace(self._path)

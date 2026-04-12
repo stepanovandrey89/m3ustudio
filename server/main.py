@@ -162,6 +162,10 @@ class AppState:
     def reload_playlist(self) -> None:
         self.playlist = parse_playlist(PLAYLIST_PATH)
         self.store.load_or_bootstrap(self.playlist)
+        # Extend the original-groups snapshot with any channels not seen
+        # before. Non-destructive: existing entries are preserved so
+        # "group rewritten by previous sync" data never clobbers history.
+        self.store.capture_original_groups(self.playlist)
 
 
 _state = AppState()
@@ -343,11 +347,15 @@ def _sync_main_to_source() -> None:
     main_ids = _state.store.current_ids()
 
     # Rewrite the source file with Main at the top, tagged as "основное".
+    # Pass the original-groups snapshot so that channels removed from Main
+    # are restored to their real groups instead of leaking as ghost entries
+    # still tagged "основное".
     text = build_with_main_group(
         header=_state.playlist.header,
         all_channels=_state.playlist.channels,
         main_ids=main_ids,
         group_name=MAIN_GROUP_NAME,
+        original_groups=_state.store.original_groups_map(),
     )
     PLAYLIST_PATH.write_text(text, encoding="utf-8")
     _state.playlist = parse_playlist(PLAYLIST_PATH)
@@ -402,6 +410,7 @@ def export_playlist() -> PlainTextResponse:
         all_channels=_state.playlist.channels,
         main_ids=_state.store.current_ids(),
         group_name=MAIN_GROUP_NAME,
+        original_groups=_state.store.original_groups_map(),
     )
     return PlainTextResponse(
         content=text,
@@ -479,6 +488,11 @@ async def import_playlist(
     STATE_PATH.unlink(missing_ok=True)
 
     _state.reload_playlist()
+    # New provider → old id/group snapshot is obsolete. Replace it with a
+    # fresh one BEFORE the first rewrite, so we still have the real pre-sync
+    # groups on record. After this point, the ghost-fix in
+    # build_with_main_group will have accurate data to work with.
+    _state.store.reset_original_groups(_state.playlist)
 
     # Case 1: explicit user-provided channel list takes priority.
     if names and names.strip():
@@ -515,9 +529,12 @@ async def import_playlist(
             all_channels=_state.playlist.channels,
             main_ids=seeded_ids,
             group_name=MAIN_GROUP_NAME,
+            original_groups=_state.store.original_groups_map(),
         )
         PLAYLIST_PATH.write_text(new_text, encoding="utf-8")
         # Reload so in-memory channels reflect the new group-title.
+        # capture_original_groups() inside reload_playlist is non-destructive,
+        # so the real original groups we captured above survive intact.
         _state.reload_playlist()
 
     return JSONResponse({"ok": True, "total": len(_state.playlist.channels)})

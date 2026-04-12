@@ -38,11 +38,18 @@ def build_with_main_group(
     all_channels: Iterable[Channel],
     main_ids: Iterable[str],
     group_name: str = "основное",
+    original_groups: dict[str, str] | None = None,
 ) -> str:
     """Produce the final playlist: main_ids (in order, rewritten to group_name),
     followed by the remaining channels in their original order.
 
     Missing ids are silently skipped.
+
+    `original_groups` is a snapshot of each channel's first-seen group-title
+    (id → group). When provided, channels that are currently tagged as
+    `group_name` in memory but are no longer in `main_ids` are restored to
+    their original group — this prevents removed-from-Main channels from
+    leaking as ghosts in the output's `group_name` section.
     """
     all_list = list(all_channels)
     by_id = {ch.id: ch for ch in all_list}
@@ -56,5 +63,21 @@ def build_with_main_group(
         main_seen.add(cid)
         main_channels.append(by_id[cid].with_group(group_name))
 
-    rest_channels = [ch for ch in all_list if ch.id not in main_seen]
+    group_name_lc = group_name.lower()
+    rest_channels: list[Channel] = []
+    for ch in all_list:
+        if ch.id in main_seen:
+            continue
+        # Ghost fix: channel was previously in Main (tagged group_name in
+        # memory) but is no longer → restore to its original group.
+        if (
+            original_groups
+            and ch.group.lower() == group_name_lc
+            and ch.id in original_groups
+            and original_groups[ch.id].lower() != group_name_lc
+        ):
+            rest_channels.append(ch.with_group(original_groups[ch.id]))
+        else:
+            rest_channels.append(ch)
+
     return build_playlist(header, [*main_channels, *rest_channels])
