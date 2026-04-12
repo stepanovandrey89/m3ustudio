@@ -91,7 +91,9 @@ def build_with_main_group(
 
     # Capitalize group names so they display consistently (e.g. "спорт" → "Спорт").
     rest_channels = [
-        ch.with_group(ch.group[0].upper() + ch.group[1:]) if ch.group and not ch.group[0].isupper() else ch
+        ch.with_group(ch.group[0].upper() + ch.group[1:])
+        if ch.group and not ch.group[0].isupper()
+        else ch
         for ch in rest_channels
     ]
 
