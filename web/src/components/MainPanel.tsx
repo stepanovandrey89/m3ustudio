@@ -11,6 +11,7 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { CheckSquare, GripVertical, Sparkles, Square, Trash2, X } from 'lucide-react'
 import { useCallback, useMemo, useRef } from 'react'
 import { cn } from '../lib/cn'
+import { useI18n } from '../lib/i18n'
 import { useIsMobile } from '../hooks/useIsMobile'
 import type { Channel } from '../types'
 import { ChannelLogo } from './ChannelLogo'
@@ -43,6 +44,7 @@ export function MainPanel({
   isSourceDragging,
 }: MainPanelProps) {
   const isMobile = useIsMobile()
+  const { t } = useI18n()
   const ids = useMemo(() => channels.map((ch) => ch.id), [channels])
 
   const { setNodeRef: setDropRef, isOver } = useDroppable({ id: 'main-panel' })
@@ -58,17 +60,17 @@ export function MainPanel({
       <div className="flex items-center justify-between border-b border-white/5 px-4 py-3">
         <div>
           <h2 className="font-display text-[9px] font-semibold uppercase tracking-[0.12em] text-[var(--color-indigo-primary)]">
-            Main
+            {t('main')}
           </h2>
           {multiMode ? (
             <p className="mt-1 font-mono text-[10px] text-[var(--color-cyan-primary)]/80">
-              selected {selected.size} / {channels.length}
+              {t('selected')} {selected.size} / {channels.length}
             </p>
           ) : !isMobile ? (
             <p className="mt-1 font-mono text-[10px] text-fog-100/50">
               {isSourceDragging
-                ? 'drop to add'
-                : 'hold to select · drag to reorder'}
+                ? t('drop_to_add')
+                : t('hold_to_select')}
             </p>
           ) : null}
         </div>
@@ -83,7 +85,7 @@ export function MainPanel({
               className="flex items-center gap-1.5 rounded-lg border border-[var(--color-rose-primary)]/40 bg-[var(--color-rose-primary)]/15 px-3 py-1.5 text-[12px] font-medium text-[var(--color-rose-primary)] transition hover:bg-[var(--color-rose-primary)]/25"
             >
               <Trash2 className="h-3.5 w-3.5" />
-              Remove {selected.size}
+              {t('remove')} {selected.size}
             </motion.button>
           )}
           {multiMode && (
@@ -95,12 +97,12 @@ export function MainPanel({
               className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-[12px] font-medium text-fog-200 transition hover:bg-white/10"
             >
               <X className="h-3.5 w-3.5" />
-              Done
+              {t('done')}
             </motion.button>
           )}
           {!multiMode && !isMobile && (
             <div className="tabnum font-mono text-[11px] text-fog-100/60">
-              {channels.length} <span className="text-fog-100/40">channels in favorites</span>
+              {channels.length} <span className="text-fog-100/40">{t('channels_in_favorites')}</span>
             </div>
           )}
         </div>
@@ -136,6 +138,7 @@ export function MainPanel({
 }
 
 function EmptyState({ isOver }: { isOver: boolean }) {
+  const { t } = useI18n()
   return (
     <div
       className={cn(
@@ -156,12 +159,12 @@ function EmptyState({ isOver }: { isOver: boolean }) {
       </div>
       <div>
         <p className="text-sm font-medium text-fog-200">
-          {isOver ? 'Drop to add' : 'Empty for now'}
+          {isOver ? t('drop_here') : t('empty_title')}
         </p>
         <p className="mt-1 text-xs text-fog-100/60">
           {isOver
             ? ''
-            : 'Pick channels from the source on the left — they\'ll appear here'}
+            : t('empty_description')}
         </p>
       </div>
     </div>

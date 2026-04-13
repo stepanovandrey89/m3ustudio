@@ -20,15 +20,18 @@ BOX Be On Edge HD
 BOX Be On Edge Live 1 HD
 BOX Be On Edge Live 2 HD
 Матч ТВ HD
+Матч! Премьер HD
 Eurosport 1 HD
 Eurosport 2 HD
 Окко Спорт HD
 Окко Прайм Спорт HD
 Окко Футбол HD
-Матч! Премьер HD
 Матч! Футбол 1 HD
 Матч! Футбол 2 HD
 Матч! Футбол 3 HD
+Футбол HD
+BOX SportCast HD
+BOX SR Sport 4K HDR
 Sky Sport Premier League HD DE
 Sky Sport Bundesliga 1 HD DE
 Sky Sports Football HD UK
@@ -39,7 +42,9 @@ Setanta Sports 2 HD
 Авто Плюс HD
 Liberty Авто Гир FHD
 BOX AutoTrend HD
+Авто 24 HD
 Драйв HD
+VF Авто
 Sky Sports Racing HD UK
 Sky Sports F1 HD UK
 DAZN F1 ES
@@ -60,6 +65,8 @@ BCU Premiere 1 HD
 BCU Premiere HD
 BCU Premiere 2 HD
 BCU Premiere 3 HD
+BCU Criminal HD
+BCU Russian HD
 BCU Action HD
 BCU TruMotion HD
 BCU Comedy HD
@@ -75,8 +82,28 @@ MM Супергерои HD
 MM Скорость HD
 MM Боевик Classic HD
 MM Спорт HD
+MM Комедия HD
+MM Ужастик HD
+MM Ужасы Classic HD
 MM USSR Комедия HD
 MM USSR Сказки HD
+Мосфильм. Золотая коллекция HD
+Дом Кино Премиум HD
+Кион Хит HD
+CineMan Top
+CineMan РуКино
+CineMan Ментовские войны
+CineMan Фитнес
+Citrus Comedy
+Citrus Marvel
+Magic Family HD
+VeleS Страшное
+VF Adventure
+VF Premiere
+VF Премьера
+VF Fantastic
+VF Disney Movie
+Премиальное HD
 KinoJam 1 HD
 KinoJam 2 HD
 Viju TV1000 HD
@@ -85,61 +112,38 @@ Viju TV1000 Русское HD
 Viju+ Premiere HD
 Viju+ Megahit HD
 Viju+ Comedy HD
-VF Premiere
-VF Премьера
-TOP Cinema HD
+Кино ТВ HD
 Кинохит HD
 Киномикс HD
-Премиальное HD
-Кино ТВ HD
-Trash HD
-CineMan РуКино
-CineMan Ментовские войны
-CineMan Фитнес
-Magic Russian HD
 Киносемья HD
 Кинокомедия HD
-VF Adventure
-VF Fantastic
-Z!Crime HD
+Мужское Кино HD
+Liberty Комедии FHD
+Magic Russian HD
+TOP Cinema HD
+Trash HD
+Tviksel Кино 2 HD
+Yosso TV Adventure
 Yosso TV Grand
 Yosso TV New Кино
 Yosso TV Русские Фильмы
-Liberty Комедии FHD
-Tviksel Кино 2 HD
 VeleS 60fps
-Мосфильм. Золотая коллекция HD
+Z!Crime HD
 National Geographic HD
 Animal Planet HD
 MM Live Planet HD
+VF Орел и решка
+VF Путешествия
 Liberty Планета360 FHD
 Big Planet HD
-Z!Travel HD
 Поехали! HD
+BOX Travel HD
 BOX Travel Premiere HD
 BOX Memory HD
-BOX Travel HD
 Travel Channel HD
+Z!Travel HD
 Охотник и Рыболов HD
 Охота и рыбалка
 Дикая рыбалка HD
 VF Рыбалка
-Дом Кино Премиум HD
-Кион Хит HD
-Мужское Кино HD
-Футбол HD
-BCU Criminal HD
-BCU Russian HD
 Fast & Fun Box HD
-CineMan Top
-Citrus Comedy
-Citrus Marvel
-Magic Family HD
-MM Комедия HD
-MM Ужастик HD
-MM Ужасы Classic HD
-VeleS Страшное
-VF Disney Movie
-Yosso TV Adventure
-BOX SportCast HD
-BOX SR Sport 4K HDR

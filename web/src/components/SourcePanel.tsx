@@ -4,12 +4,13 @@ import {
 } from '@dnd-kit/core'
 import { arrayMove } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { ArrowDown, ArrowUp, ChevronDown, GripVertical, Pencil, Plus, Search, Trash2, X } from 'lucide-react'
+import { ArrowDown, ArrowUp, ChevronDown, FolderPlus, GripVertical, Pencil, Plus, Search, Trash2, X } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useMemo } from 'react'
 import type { Channel } from '../types'
 import { api } from '../lib/api'
 import { cn } from '../lib/cn'
+import { useI18n, translateGroup } from '../lib/i18n'
 import { cyrFirstCompare } from '../lib/sort'
 import { useIsMobile } from '../hooks/useIsMobile'
 import { useSourceMutation } from '../hooks/usePlaylist'
@@ -26,6 +27,7 @@ interface SourcePanelProps {
 
 export function SourcePanel({ groups, mainIds, onAdd, onPreview }: SourcePanelProps) {
   const isMobile = useIsMobile()
+  const { lang, t } = useI18n()
   const sourceMutate = useSourceMutation()
   const [query, setQuery] = useState('')
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
@@ -62,10 +64,16 @@ export function SourcePanel({ groups, mainIds, onAdd, onPreview }: SourcePanelPr
 
   const entries = useMemo(() => {
     const raw = Object.entries(sorted)
-    if (groupOrder.length === 0) return raw
+    // Include empty groups from groupOrder so they appear as drop targets
+    const existing = new Set(raw.map(([name]) => name))
+    const withEmpty: [string, Channel[]][] = [
+      ...raw,
+      ...groupOrder.filter((g) => !existing.has(g)).map((g) => [g, []] as [string, Channel[]]),
+    ]
+    if (groupOrder.length === 0) return withEmpty
     const orderMap = new Map(groupOrder.map((name, i) => [name, i]))
     const fallback = groupOrder.length
-    return [...raw].sort(([a], [b]) => (orderMap.get(a) ?? fallback) - (orderMap.get(b) ?? fallback))
+    return [...withEmpty].sort(([a], [b]) => (orderMap.get(a) ?? fallback) - (orderMap.get(b) ?? fallback))
   }, [sorted, groupOrder])
 
   const groupNames = useMemo(() => entries.map(([name]) => name), [entries])
@@ -106,19 +114,52 @@ export function SourcePanel({ groups, mainIds, onAdd, onPreview }: SourcePanelPr
     sourceMutate.mutate({ op: 'delete_channel', id })
   }
 
+  const [creatingGroup, setCreatingGroup] = useState(false)
+  const [newGroupName, setNewGroupName] = useState('')
+  const newGroupRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (creatingGroup) newGroupRef.current?.focus()
+  }, [creatingGroup])
+
+  const commitNewGroup = () => {
+    const name = newGroupName.trim()
+    setCreatingGroup(false)
+    setNewGroupName('')
+    if (!name) return
+    if (Object.keys(groups).some((g) => g.toLowerCase() === name.toLowerCase())) return
+    // Create the group by moving a dummy — but actually groups don't exist
+    // without channels. So we just expand it and let the user drag channels in.
+    // For now, add it to the group order so it appears in the list.
+    const newOrder = [...groupNames, name]
+    setGroupOrder(newOrder)
+    api.setGroupOrder(newOrder).catch(() => {})
+    setExpanded((prev) => new Set([...prev, name]))
+  }
+
   return (
     <section className="glass flex min-h-0 flex-col overflow-hidden rounded-2xl">
       <div className="flex items-center justify-between border-b border-white/5 px-4 py-3">
         <div>
           <h2 className="font-display text-[9px] font-semibold uppercase tracking-[0.12em] text-fog-100/80">
-            Source
+            {t('source')}
           </h2>
           <p className="mt-1 font-mono text-[10px] text-fog-100/50">
             playlist.m3u8
           </p>
         </div>
-        <div className="tabnum text-right font-mono text-[11px] text-fog-100/60">
-          {totalCount} <span className="text-fog-100/40">channels</span>
+        <div className="flex items-center gap-2">
+          <div className="tabnum text-right font-mono text-[11px] text-fog-100/60">
+            {totalCount} <span className="text-fog-100/40">{t('channels')}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setCreatingGroup(true)}
+            className="flex h-6 w-6 items-center justify-center rounded-md border border-white/10 bg-white/5 text-fog-100/50 transition hover:border-white/20 hover:bg-white/10 hover:text-white"
+            title={t('new_group')}
+          >
+            <FolderPlus className="h-3 w-3" />
+          </button>
         </div>
       </div>
 
@@ -129,7 +170,7 @@ export function SourcePanel({ groups, mainIds, onAdd, onPreview }: SourcePanelPr
             type="search"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search channels…"
+            placeholder={t('search_channels')}
             className={cn(
               'w-full rounded-lg border border-white/10 bg-white/[0.03] py-2 pl-9 pr-9 text-[13px] text-white',
               'placeholder:text-fog-100/40',
@@ -152,7 +193,25 @@ export function SourcePanel({ groups, mainIds, onAdd, onPreview }: SourcePanelPr
         {entries.length === 0 && (
           <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
             <Search className="h-8 w-8 text-fog-100/30" />
-            <p className="text-sm text-fog-100/60">Nothing found</p>
+            <p className="text-sm text-fog-100/60">{t('nothing_found')}</p>
+          </div>
+        )}
+
+        {creatingGroup && (
+          <div className="mb-1 flex items-center gap-2 rounded-lg bg-white/5 px-2 py-1.5">
+            <FolderPlus className="h-3.5 w-3.5 shrink-0 text-[var(--color-indigo-primary)]" />
+            <input
+              ref={newGroupRef}
+              value={newGroupName}
+              onChange={(e) => setNewGroupName(e.target.value)}
+              onBlur={commitNewGroup}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') { e.preventDefault(); commitNewGroup() }
+                if (e.key === 'Escape') { setCreatingGroup(false); setNewGroupName('') }
+              }}
+              placeholder={t('new_group')}
+              className="min-w-0 flex-1 bg-transparent text-[12px] font-medium uppercase tracking-wider text-white outline-none placeholder:normal-case placeholder:text-fog-100/30"
+            />
           </div>
         )}
 
@@ -160,6 +219,7 @@ export function SourcePanel({ groups, mainIds, onAdd, onPreview }: SourcePanelPr
           <SourceGroup
             key={groupName}
             name={groupName}
+            displayName={translateGroup(groupName, lang)}
             channels={channels}
             mainIds={mainIds}
             open={isExpanded(groupName)}
@@ -181,6 +241,7 @@ export function SourcePanel({ groups, mainIds, onAdd, onPreview }: SourcePanelPr
 
 interface SourceGroupProps {
   name: string
+  displayName: string
   channels: Channel[]
   mainIds: Set<string>
   open: boolean
@@ -197,6 +258,7 @@ interface SourceGroupProps {
 
 function SourceGroup({
   name,
+  displayName,
   channels,
   mainIds,
   open,
@@ -269,7 +331,7 @@ function SourceGroup({
             />
           ) : (
             <span className="min-w-0 flex-1 truncate text-[12px] font-medium uppercase tracking-wider text-fog-100/85">
-              {name}
+              {displayName}
             </span>
           )}
         </button>

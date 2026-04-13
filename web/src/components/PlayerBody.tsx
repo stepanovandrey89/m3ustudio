@@ -24,6 +24,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { api } from '../lib/api'
 import { buildArchiveUrl, getEpgOffset, saveEpgOffset } from '../lib/archive'
 import { cn } from '../lib/cn'
+import { useI18n } from '../lib/i18n'
 import { loadTranscodePrefs, saveTranscodePrefs } from '../lib/transcodePrefs'
 import { useIsMobile } from '../hooks/useIsMobile'
 import type { Channel, Programme } from '../types'
@@ -68,6 +69,7 @@ export function PlayerBody({
 }: PlayerBodyProps) {
   const { channel, list } = preview
   const isMobile = useIsMobile()
+  const { t } = useI18n()
 
   const videoRef = useRef<HTMLVideoElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -432,10 +434,10 @@ export function PlayerBody({
                 className="pointer-events-auto flex items-center gap-1.5 rounded-full border border-[var(--color-amber-primary)]/40 bg-black/60 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-amber-primary)] backdrop-blur transition hover:bg-black/80"
                 initial={{ opacity: 0, scale: 0.9 }}
                 animate={{ opacity: 1, scale: 1 }}
-                title="Return to live"
+                title={t('return_to_live')}
               >
                 <History className="h-3 w-3" />
-                Archive
+                {t('archive')}
               </motion.button>
             ) : (
               <motion.span
@@ -444,7 +446,7 @@ export function PlayerBody({
                 animate={{ opacity: 1, scale: 1 }}
               >
                 <Radio className="h-3 w-3 animate-pulse" />
-                Live
+                {t('live')}
               </motion.span>
             )}
 
@@ -505,7 +507,7 @@ export function PlayerBody({
               type="button"
               onClick={onClose}
               aria-label="Close player"
-              title="Close (Esc)"
+              title={t('close')}
               className={cn(
                 'absolute right-4 top-4 z-20 flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-black/50 text-white/85 backdrop-blur',
                 'transition duration-200 ease-out',
@@ -522,7 +524,7 @@ export function PlayerBody({
             <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/50">
               <div className="flex items-center gap-2 text-sm text-white/70">
                 <Loader2 className="h-4 w-4 animate-spin" />
-                Connecting…
+                {t('connecting')}
               </div>
             </div>
           )}
@@ -578,13 +580,13 @@ export function PlayerBody({
             'flex shrink-0 items-center gap-1.5 overflow-x-auto scrollbar-none',
             isMobile && 'pb-0.5',
           )}>
-            <ControlButton label="Previous channel (←)" onClick={goPrev} disabled={!prev}>
+            <ControlButton label={t('prev_channel')} onClick={goPrev} disabled={!prev}>
               <ChevronLeft className="h-4 w-4" />
             </ControlButton>
-            <ControlButton label={isPlaying ? 'Pause (Space)' : 'Play (Space)'} onClick={togglePlay} primary>
+            <ControlButton label={isPlaying ? t('pause') : t('play')} onClick={togglePlay} primary>
               {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4 fill-current" />}
             </ControlButton>
-            <ControlButton label="Next channel (→)" onClick={goNext} disabled={!next}>
+            <ControlButton label={t('next_channel')} onClick={goNext} disabled={!next}>
               <ChevronRight className="h-4 w-4" />
             </ControlButton>
 
@@ -592,7 +594,7 @@ export function PlayerBody({
 
             <FavoriteButton inMain={inMain} onClick={handleFavorite} />
 
-            <ControlButton label="Delete channel" onClick={handleRemoveChannel}>
+            <ControlButton label={t('delete_channel')} onClick={handleRemoveChannel}>
               <Trash2 className="h-4 w-4" />
             </ControlButton>
 
@@ -605,7 +607,7 @@ export function PlayerBody({
             />
 
             <ControlButton
-              label={channelListOpen ? 'Hide channel list' : 'Show channel list'}
+              label={channelListOpen ? t('hide_channels') : t('show_channels')}
               onClick={() => setChannelListOpen((v) => !v)}
               active={channelListOpen}
             >
@@ -613,7 +615,7 @@ export function PlayerBody({
             </ControlButton>
 
             <ControlButton
-              label={nowPlayingOpen ? 'Hide now playing' : 'Show now playing'}
+              label={nowPlayingOpen ? t('hide_now_playing') : t('show_now_playing')}
               onClick={() => setNowPlayingOpen((v) => !v)}
               active={nowPlayingOpen}
             >
@@ -621,7 +623,7 @@ export function PlayerBody({
             </ControlButton>
 
             <ControlButton
-              label={transcodeOn ? 'Disable transcode' : 'Fix audio: AC-3 → AAC'}
+              label={transcodeOn ? t('disable_transcode') : t('fix_audio')}
               onClick={toggleTranscode}
               active={transcodeOn}
             >
@@ -629,7 +631,7 @@ export function PlayerBody({
             </ControlButton>
 
             <ControlButton
-              label={epgOpen ? 'Hide guide (G)' : 'Show guide (G)'}
+              label={epgOpen ? t('hide_guide') : t('show_guide')}
               onClick={onToggleEpg}
               active={epgOpen}
             >
@@ -638,7 +640,7 @@ export function PlayerBody({
 
             {!isMobile && (
               <ControlButton
-                label={isFullscreen ? 'Exit fullscreen (F)' : 'Fullscreen (F)'}
+                label={isFullscreen ? t('exit_fullscreen') : t('fullscreen')}
                 onClick={toggleFullscreen}
               >
                 {isFullscreen ? <Minimize className="h-4 w-4" /> : <Maximize className="h-4 w-4" />}
@@ -782,6 +784,7 @@ function ControlButton({ label, onClick, disabled, primary, active, children }: 
 interface FavoriteButtonProps { inMain: boolean; onClick: () => void }
 
 function FavoriteButton({ inMain, onClick }: FavoriteButtonProps) {
+  const { t } = useI18n()
   return (
     <motion.button
       type="button"
@@ -789,8 +792,8 @@ function FavoriteButton({ inMain, onClick }: FavoriteButtonProps) {
       whileTap={{ scale: 0.85 }}
       animate={inMain ? { scale: [1, 1.15, 1] } : { scale: 1 }}
       transition={{ duration: 0.25 }}
-      title={inMain ? 'Remove from Main' : 'Add to Main'}
-      aria-label={inMain ? 'Remove from Main' : 'Add to Main'}
+      title={inMain ? t('remove_from_main') : t('add_to_main')}
+      aria-label={inMain ? t('remove_from_main') : t('add_to_main')}
       className={cn(
         'flex h-9 w-9 items-center justify-center rounded-lg border transition',
         inMain

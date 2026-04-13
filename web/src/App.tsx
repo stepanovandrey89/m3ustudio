@@ -30,6 +30,7 @@ import {
 import { useIsMobile } from './hooks/useIsMobile'
 import { useTheme } from './hooks/useTheme'
 import { cn } from './lib/cn'
+import { useI18n } from './lib/i18n'
 import { cyrFirstCompare } from './lib/sort'
 import type { Channel } from './types'
 
@@ -67,6 +68,7 @@ function FloatingShape({ className, delay = 0, width = 400, height = 100, rotate
 
 function App() {
   const { theme, toggleTheme } = useTheme()
+  const { t } = useI18n()
   const [mousePos, setMousePos] = useState({ x: 0, y: 0, visible: false })
   useEffect(() => {
     const onMove = (e: MouseEvent) => setMousePos({ x: e.clientX, y: e.clientY, visible: true })
@@ -360,7 +362,7 @@ function App() {
           'glass rounded-xl border-[var(--color-rose-primary)]/30 px-4 py-3 text-sm text-[var(--color-rose-primary)]',
           isMobile ? 'mx-4 mt-2 mb-2' : 'mx-auto mb-3 w-full max-w-5xl px-4',
         )}>
-          Error: {String(error)}
+          {t('error')}: {String(error)}
         </div>
       )}
 
@@ -433,7 +435,7 @@ function App() {
         >
           <MobileTab
             active={activeTab === 'source'}
-            label="Source"
+            label={t('source')}
             count={sourceCount}
             onClick={() => setActiveTab('source')}
           >
@@ -441,7 +443,7 @@ function App() {
           </MobileTab>
           <MobileTab
             active={activeTab === 'main'}
-            label="Main"
+            label={t('main')}
             count={mainCount}
             onClick={() => setActiveTab('main')}
           >

@@ -23,7 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from server.epg import EpgGuide
-from server.logos import EpgIconIndex, IptvOrgIndex, LogoResolver
+from server.logos import EpgIconIndex, IptvOrgIndex, LogoRegistry, LogoResolver
 from server.logos.resolver import _rtrs_candidate
 from server.playlist import Channel, Playlist, parse_playlist
 from server.playlist.builder import build_playlist, build_with_main_group
@@ -156,6 +156,7 @@ class AppState:
             epg_index=self.epg_icons,
         )
         self.epg: EpgGuide = EpgGuide(EPG_CACHE, url=EPG_URL)
+        self.logo_registry: LogoRegistry = LogoRegistry(LOGO_CACHE)
         self.transcode: TranscodeManager = TranscodeManager(TRANSCODE_ROOT, ffmpeg_bin=FFMPEG_BIN)
         self.transcode_cleanup_task: asyncio.Task | None = None
 
@@ -241,18 +242,24 @@ async def _warm_logo_cache() -> None:
     Sets _warming_done = True when finished so the frontend can refetch.
     """
     global _warming_done
+    reg = _state.logo_registry
     # Give the app a moment to finish startup before hammering the network.
     await asyncio.sleep(2)
 
+    # Build / refresh registry entries for every channel. Populate EPG URLs.
+    for ch in _state.playlist.channels:
+        epg_url = _state.epg_icons.lookup(ch.name) or ""
+        reg.ensure_channel(ch.id, ch.name, epg_url)
+
+    # Sync cached flags with what's actually on disk (e.g. manual drops).
+    reg.update_cached_flags(_state.logos.has_cached)
+    reg.save()
+
+    # Candidates: channels that need resolution and haven't exhausted retries.
     candidates = [
         ch
         for ch in _state.playlist.channels
-        if not _state.logos.has_cached(ch.name)
-        and (
-            _rtrs_candidate(ch.name) is not None
-            or _state.iptv_index.lookup(ch.name) is not None
-            or _state.epg_icons.lookup(ch.name) is not None
-        )
+        if not _state.logos.has_cached(ch.name) and reg.should_retry(ch.id)
     ]
 
     if not candidates:
@@ -263,8 +270,24 @@ async def _warm_logo_cache() -> None:
 
     async def _fetch_one(ch: Channel) -> None:
         async with sem:
-            with contextlib.suppress(Exception):
-                await _state.logos.resolve(ch.name)
+            try:
+                result = await _state.logos.resolve(ch.name)
+                if result:
+                    # Determine which source succeeded
+                    source = ""
+                    if _rtrs_candidate(ch.name):
+                        source = "rtrs"
+                    elif _state.iptv_index.lookup(ch.name):
+                        source = "iptv-org"
+                    elif _state.epg_icons.lookup(ch.name):
+                        source = "epg"
+                    else:
+                        source = "cdn"
+                    reg.mark_found(ch.id, source)
+                else:
+                    reg.mark_miss(ch.id)
+            except Exception:  # noqa: BLE001
+                reg.mark_miss(ch.id)
 
     await asyncio.gather(*[_fetch_one(ch) for ch in candidates])
     _warming_done = True
@@ -672,7 +695,111 @@ def get_duplicates() -> JSONResponse:
 @app.get("/api/logos/status")
 def logos_status() -> JSONResponse:
     """Return whether the background logo warming task has finished."""
-    return JSONResponse({"warmed": _warming_done})
+    return JSONResponse({
+        "warmed": _warming_done,
+        **_state.logo_registry.stats(),
+    })
+
+
+@app.get("/api/logos/registry")
+def get_logo_registry(
+    page: int = Query(default=1, ge=1),
+    per_page: int = Query(default=50, ge=1, le=200),
+    q: str = Query(default=""),
+    status: str = Query(default=""),
+) -> JSONResponse:
+    """Paginated, searchable logo registry."""
+    from dataclasses import asdict
+
+    entries = _state.logo_registry.all_entries()
+    items = [
+        {"id": cid, **asdict(entry)} for cid, entry in entries.items()
+    ]
+
+    # Filter by status
+    if status:
+        items = [i for i in items if i["status"] == status]
+
+    # Search by channel name
+    if q:
+        q_lower = q.lower()
+        items = [i for i in items if q_lower in i["name"].lower()]
+
+    # Sort: pending first, then missing, then found; alphabetically within.
+    status_order = {"pending": 0, "missing": 1, "found": 2}
+    items.sort(key=lambda i: (status_order.get(i["status"], 9), i["name"].lower()))
+
+    total = len(items)
+    start = (page - 1) * per_page
+    page_items = items[start : start + per_page]
+
+    return JSONResponse({
+        "items": page_items,
+        "total": total,
+        "page": page,
+        "pages": max(1, (total + per_page - 1) // per_page),
+        **_state.logo_registry.stats(),
+    })
+
+
+@app.post("/api/logos/retry/{channel_id}")
+async def retry_logo(channel_id: str) -> JSONResponse:
+    """Reset and retry logo resolution for a single channel."""
+    ch = _state.playlist.by_id(channel_id)
+    if not ch:
+        raise HTTPException(404, "Channel not found")
+    _state.logo_registry.reset_for_retry(channel_id)
+    # Clear from resolver's miss cache so it tries again.
+    _state.logos.clear_miss(ch.name)
+    result = await _state.logos.resolve(ch.name)
+    if result:
+        _state.logo_registry.mark_found(channel_id, "retry")
+    else:
+        _state.logo_registry.mark_miss(channel_id)
+    return JSONResponse({"ok": True, "found": result is not None})
+
+
+@app.post("/api/logos/retry-all")
+async def retry_all_logos() -> JSONResponse:
+    """Reset all failed logos and re-run warming."""
+    count = _state.logo_registry.reset_all_failed()
+    if count > 0:
+        global _warming_done
+        _warming_done = False
+        asyncio.create_task(_warm_logo_cache())
+    return JSONResponse({"ok": True, "reset": count})
+
+
+@app.post("/api/logos/skip/{channel_id}")
+def skip_logo(channel_id: str) -> JSONResponse:
+    """Mark a channel logo as skipped — no more retries."""
+    _state.logo_registry.mark_skipped(channel_id)
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/logos/override/{channel_id}")
+async def override_logo(
+    channel_id: str,
+    url: str = Query(..., description="URL of the logo image"),
+) -> JSONResponse:
+    """Manually set a logo from a URL for a channel."""
+    import httpx
+
+    ch = _state.playlist.by_id(channel_id)
+    if not ch:
+        raise HTTPException(404, "Channel not found")
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(url, headers={"User-Agent": "m3u-studio/1.0"})
+            resp.raise_for_status()
+            data = resp.content
+            if not data:
+                raise HTTPException(400, "Empty response from URL")
+            _state.logos.save_to_cache(ch.name, data)
+            _state.logo_registry.mark_manual(channel_id, ch.name)
+            return JSONResponse({"ok": True})
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, f"Failed to fetch logo: {exc}") from exc
 
 
 @app.get("/api/logo/{channel_id}")

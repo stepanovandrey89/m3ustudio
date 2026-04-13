@@ -1,8 +1,10 @@
 import { AnimatePresence, motion } from 'framer-motion'
-import { AlertTriangle, FileText, List, ListOrdered, Moon, Play, RefreshCw, Settings2, Sun, Trash2, Upload, X } from 'lucide-react'
+import { AlertTriangle, FileText, Globe, Image, List, ListOrdered, Moon, Play, RefreshCw, Settings2, Sun, Trash2, Upload, X } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { api } from '../lib/api'
+import { useI18n } from '../lib/i18n'
+import { LogoManagerDialog } from './LogoManagerDialog'
 import { cn } from '../lib/cn'
 import { useIsMobile } from '../hooks/useIsMobile'
 import type { Theme } from '../hooks/useTheme'
@@ -19,9 +21,11 @@ interface HeaderProps {
 
 export function Header({ duplicatesCount, theme, onToggleTheme, onReload, onShowDuplicates, onRefetchData }: HeaderProps) {
   const isMobile = useIsMobile()
+  const { t } = useI18n()
   const [clearing, setClearing] = useState(false)
   const [showImportDialog, setShowImportDialog] = useState(false)
   const [showDefaultOrderDialog, setShowDefaultOrderDialog] = useState(false)
+  const [showLogoManager, setShowLogoManager] = useState(false)
   const [showSettingsMenu, setShowSettingsMenu] = useState(false)
   const [confirmClear, setConfirmClear] = useState(false)
 
@@ -39,8 +43,8 @@ export function Header({ duplicatesCount, theme, onToggleTheme, onReload, onShow
   useEffect(() => {
     if (!showSettingsMenu) return
     const handler = (e: MouseEvent) => {
-      const t = e.target as Node
-      if (settingsMenuRef.current?.contains(t) || settingsBtnRef.current?.contains(t)) return
+      const target = e.target as Node
+      if (settingsMenuRef.current?.contains(target) || settingsBtnRef.current?.contains(target)) return
       setShowSettingsMenu(false)
       setConfirmClear(false)
     }
@@ -81,7 +85,7 @@ export function Header({ duplicatesCount, theme, onToggleTheme, onReload, onShow
             type="button"
             onClick={onToggleTheme}
             className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-fog-200 transition hover:border-white/20 hover:bg-white/10 hover:text-white"
-            title={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+            title={theme === 'dark' ? t('switch_to_light') : t('switch_to_dark')}
             aria-label="Toggle theme"
           >
             {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
@@ -97,7 +101,7 @@ export function Header({ duplicatesCount, theme, onToggleTheme, onReload, onShow
                   ? 'border-white/20 bg-white/10 text-white'
                   : 'border-white/10 bg-white/5 text-fog-200 hover:border-white/20 hover:bg-white/10 hover:text-white',
               )}
-              title="Settings"
+              title={t('settings')}
             >
               <Settings2 className="h-4 w-4" />
               {duplicatesCount > 0 && (
@@ -130,7 +134,7 @@ export function Header({ duplicatesCount, theme, onToggleTheme, onReload, onShow
                 className="flex w-full items-center gap-3 px-4 py-3 text-[13px] text-fog-200 transition hover:bg-white/5 hover:text-white"
               >
                 <Upload className="h-4 w-4 shrink-0 text-fog-100/50" />
-                <span className="font-medium">Import playlist</span>
+                <span className="font-medium">{t('import_playlist')}</span>
               </button>
 
               <div className="mx-4 border-t border-white/5" />
@@ -144,7 +148,7 @@ export function Header({ duplicatesCount, theme, onToggleTheme, onReload, onShow
               >
                 <List className="h-4 w-4 shrink-0 text-[var(--color-indigo-primary)]" />
                 <div>
-                  <div className="font-medium">Export playlist</div>
+                  <div className="font-medium">{t('export_playlist')}</div>
                   <div className="text-[11px] text-fog-100/40">playlist_main.m3u8</div>
                 </div>
               </a>
@@ -156,7 +160,7 @@ export function Header({ duplicatesCount, theme, onToggleTheme, onReload, onShow
               >
                 <FileText className="h-4 w-4 shrink-0 text-[var(--color-cyan-primary)]" />
                 <div>
-                  <div className="font-medium">Export channel list</div>
+                  <div className="font-medium">{t('export_channel_list')}</div>
                   <div className="text-[11px] text-fog-100/40">main_channels.txt</div>
                 </div>
               </a>
@@ -167,9 +171,21 @@ export function Header({ duplicatesCount, theme, onToggleTheme, onReload, onShow
                 className="flex w-full items-center gap-3 px-4 py-3 text-[13px] text-fog-200 transition hover:bg-white/5 hover:text-white"
               >
                 <ListOrdered className="h-4 w-4 shrink-0 text-fog-100/50" />
-                <div>
-                  <div className="font-medium">Default channel order</div>
-                  <div className="text-[11px] text-fog-100/40">Used on first import</div>
+                <div className="min-w-0 flex-1 text-left">
+                  <div className="font-medium">{t('default_channel_order')}</div>
+                  <div className="text-[11px] text-fog-100/40">{t('used_on_first_import')}</div>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => { setShowLogoManager(true); setShowSettingsMenu(false) }}
+                className="flex w-full items-center gap-3 px-4 py-3 text-[13px] text-fog-200 transition hover:bg-white/5 hover:text-white"
+              >
+                <Image className="h-4 w-4 shrink-0 text-fog-100/50" />
+                <div className="min-w-0 flex-1 text-left">
+                  <div className="font-medium">{t('channel_logos')}</div>
+                  <div className="text-[11px] text-fog-100/40">{t('manage_logos')}</div>
                 </div>
               </button>
 
@@ -187,13 +203,19 @@ export function Header({ duplicatesCount, theme, onToggleTheme, onReload, onShow
                 )}
               >
                 <AlertTriangle className="h-4 w-4 shrink-0" />
-                <span className="flex-1 text-left font-medium">Duplicates</span>
+                <div className="flex-1 text-left">
+                  <div className="font-medium">{t('duplicates')}</div>
+                  <div className={cn('text-[11px]', duplicatesCount > 0 ? 'text-amber-400/50' : 'text-fog-100/40')}>{t('find_similar')}</div>
+                </div>
                 {duplicatesCount > 0 && (
                   <span className="rounded-full bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-semibold text-amber-400">
                     {duplicatesCount}
                   </span>
                 )}
               </button>
+
+              {/* Language */}
+              <LanguageSelector />
 
               <div className="mx-4 border-t border-white/5" />
 
@@ -208,20 +230,20 @@ export function Header({ duplicatesCount, theme, onToggleTheme, onReload, onShow
                     transition={{ duration: 0.1 }}
                     className="flex items-center gap-2 px-4 py-3"
                   >
-                    <span className="flex-1 text-[12px] text-[var(--color-rose-primary)]">Clear list?</span>
+                    <span className="flex-1 text-[12px] text-[var(--color-rose-primary)]">{t('clear_confirm')}</span>
                     <button
                       type="button"
                       onClick={handleClearConfirm}
                       className="rounded px-2.5 py-1 text-[11px] font-semibold text-[var(--color-rose-primary)] hover:bg-[var(--color-rose-primary)]/20"
                     >
-                      Yes
+                      {t('yes')}
                     </button>
                     <button
                       type="button"
                       onClick={() => setConfirmClear(false)}
                       className="rounded px-2 py-1 text-[11px] font-semibold text-fog-200 hover:bg-white/10"
                     >
-                      No
+                      {t('no')}
                     </button>
                   </motion.div>
                 ) : (
@@ -241,7 +263,7 @@ export function Header({ duplicatesCount, theme, onToggleTheme, onReload, onShow
                     )}
                   >
                     <Trash2 className="h-4 w-4 shrink-0" />
-                    <span className="font-medium">Clear list</span>
+                    <span className="font-medium">{t('clear_list')}</span>
                   </motion.button>
                 )}
               </AnimatePresence>
@@ -265,6 +287,12 @@ export function Header({ duplicatesCount, theme, onToggleTheme, onReload, onShow
           <DefaultOrderDialog onClose={() => setShowDefaultOrderDialog(false)} />
         )}
       </AnimatePresence>
+
+      <AnimatePresence>
+        {showLogoManager && (
+          <LogoManagerDialog onClose={() => setShowLogoManager(false)} />
+        )}
+      </AnimatePresence>
     </>
   )
 }
@@ -274,6 +302,7 @@ interface DefaultOrderDialogProps {
 }
 
 function DefaultOrderDialog({ onClose }: DefaultOrderDialogProps) {
+  const { t } = useI18n()
   const [names, setNames] = useState('')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -316,8 +345,8 @@ function DefaultOrderDialog({ onClose }: DefaultOrderDialogProps) {
       >
         <div className="mb-5 flex items-center justify-between">
           <div>
-            <h2 className="text-[15px] font-semibold text-white">Default channel order</h2>
-            <p className="mt-0.5 text-[12px] text-fog-100/50">Used to seed Main on first import</p>
+            <h2 className="text-[15px] font-semibold text-white">{t('default_channel_order')}</h2>
+            <p className="mt-0.5 text-[12px] text-fog-100/50">{t('used_on_first_import')}</p>
           </div>
           <button
             type="button"
@@ -330,11 +359,11 @@ function DefaultOrderDialog({ onClose }: DefaultOrderDialogProps) {
 
         <div className="mb-6">
           <label className="mb-2 block text-[11px] font-semibold uppercase tracking-wider text-fog-100/60">
-            Channel list
+            {t('channel_list')}
           </label>
           {loading ? (
             <div className="flex h-[200px] items-center justify-center text-[13px] text-fog-100/40">
-              Loading…
+              {t('connecting')}
             </div>
           ) : (
             <textarea
@@ -350,7 +379,7 @@ function DefaultOrderDialog({ onClose }: DefaultOrderDialogProps) {
             />
           )}
           <p className="mt-1.5 text-[11px] text-fog-100/40">
-            One channel name per line. Paste from an exported channel list.
+            {t('channel_list_hint')}
           </p>
         </div>
 
@@ -360,7 +389,7 @@ function DefaultOrderDialog({ onClose }: DefaultOrderDialogProps) {
             onClick={onClose}
             className="rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-[13px] font-medium text-fog-200 transition hover:bg-white/10 hover:text-white"
           >
-            Cancel
+            {t('cancel')}
           </button>
           <button
             type="button"
@@ -382,7 +411,7 @@ function DefaultOrderDialog({ onClose }: DefaultOrderDialogProps) {
             ) : (
               <>
                 <ListOrdered className="h-4 w-4" />
-                Save
+                {t('save')}
               </>
             )}
           </button>
@@ -398,6 +427,7 @@ interface ImportDialogProps {
 }
 
 function ImportDialog({ onClose, onImported }: ImportDialogProps) {
+  const { t } = useI18n()
   const [file, setFile] = useState<File | null>(null)
   const [namesFile, setNamesFile] = useState<File | null>(null)
   const [names, setNames] = useState('')
@@ -446,8 +476,8 @@ function ImportDialog({ onClose, onImported }: ImportDialogProps) {
       >
         <div className="mb-5 flex items-center justify-between">
           <div>
-            <h2 className="text-[15px] font-semibold text-white">Import playlist</h2>
-            <p className="mt-0.5 text-[12px] text-fog-100/50">Replaces current source</p>
+            <h2 className="text-[15px] font-semibold text-white">{t('import_playlist')}</h2>
+            <p className="mt-0.5 text-[12px] text-fog-100/50">{t('replaces_current')}</p>
           </div>
           <button
             type="button"
@@ -460,7 +490,7 @@ function ImportDialog({ onClose, onImported }: ImportDialogProps) {
 
         <div className="mb-4">
           <label className="mb-2 block text-[11px] font-semibold uppercase tracking-wider text-fog-100/60">
-            Playlist file <span className="text-[var(--color-rose-primary)]">*</span>
+            {t('playlist_file')} <span className="text-[var(--color-rose-primary)]">*</span>
           </label>
           <input
             ref={fileRef}
@@ -481,7 +511,7 @@ function ImportDialog({ onClose, onImported }: ImportDialogProps) {
           >
             <Upload className="h-4 w-4 shrink-0" />
             <span className="min-w-0 flex-1 truncate">
-              {file ? file.name : 'Select .m3u8 file…'}
+              {file ? file.name : t('select_file')}
             </span>
           </button>
         </div>
@@ -489,9 +519,9 @@ function ImportDialog({ onClose, onImported }: ImportDialogProps) {
         <div className="mb-6">
           <div className="mb-2 flex items-center justify-between gap-2">
             <label className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-fog-100/60">
-              Channel list
+              {t('channel_list')}
               <span className="rounded bg-white/5 px-1.5 py-0.5 text-[10px] normal-case text-fog-100/40">
-                optional
+                {t('optional')}
               </span>
             </label>
             <input
@@ -513,7 +543,7 @@ function ImportDialog({ onClose, onImported }: ImportDialogProps) {
             >
               <FileText className="h-3 w-3 shrink-0" />
               <span className="max-w-[120px] truncate">
-                {namesFile ? namesFile.name : 'Upload file'}
+                {namesFile ? namesFile.name : t('upload_file')}
               </span>
             </button>
           </div>
@@ -529,7 +559,7 @@ function ImportDialog({ onClose, onImported }: ImportDialogProps) {
             )}
           />
           <p className="mt-1.5 text-[11px] text-fog-100/40">
-            Channels from this list will be automatically added to Main in the specified order
+            {t('channels_auto_added')}
           </p>
         </div>
 
@@ -539,7 +569,7 @@ function ImportDialog({ onClose, onImported }: ImportDialogProps) {
             onClick={onClose}
             className="rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-[13px] font-medium text-fog-200 transition hover:bg-white/10 hover:text-white"
           >
-            Cancel
+            {t('cancel')}
           </button>
           <button
             type="button"
@@ -556,17 +586,56 @@ function ImportDialog({ onClose, onImported }: ImportDialogProps) {
             {importing ? (
               <>
                 <RefreshCw className="h-4 w-4 animate-spin" />
-                Importing…
+                {t('importing')}
               </>
             ) : (
               <>
                 <Upload className="h-4 w-4" />
-                Import
+                {t('import')}
               </>
             )}
           </button>
         </div>
       </motion.div>
     </motion.div>
+  )
+}
+
+function LanguageSelector() {
+  const { lang, setLang, t } = useI18n()
+  return (
+    <div className="flex items-center gap-3 px-4 py-3">
+      <Globe className="h-4 w-4 shrink-0 text-fog-100/50" />
+      <div className="min-w-0 flex-1 text-left">
+        <div className="text-[13px] font-medium text-fog-200">{t('language')}</div>
+        <div className="text-[11px] text-fog-100/40">{t('switch_language')}</div>
+      </div>
+      <div className="flex gap-0.5 rounded-lg border border-white/10 bg-white/[0.03] p-0.5">
+        <button
+          type="button"
+          onClick={() => setLang('en')}
+          className={cn(
+            'rounded-md px-2 py-0.5 text-[11px] font-medium transition',
+            lang === 'en'
+              ? 'bg-[var(--color-indigo-primary)]/20 text-[var(--color-indigo-primary)]'
+              : 'text-fog-100/50 hover:text-fog-200',
+          )}
+        >
+          EN
+        </button>
+        <button
+          type="button"
+          onClick={() => setLang('ru')}
+          className={cn(
+            'rounded-md px-2 py-0.5 text-[11px] font-medium transition',
+            lang === 'ru'
+              ? 'bg-[var(--color-indigo-primary)]/20 text-[var(--color-indigo-primary)]'
+              : 'text-fog-100/50 hover:text-fog-200',
+          )}
+        >
+          RU
+        </button>
+      </div>
+    </div>
   )
 }

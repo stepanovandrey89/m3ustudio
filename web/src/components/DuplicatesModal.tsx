@@ -5,6 +5,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { KEY_DUPLICATES, useDuplicates } from '../hooks/usePlaylist'
 import { cn } from '../lib/cn'
+import { useI18n } from '../lib/i18n'
 import type { Channel, DuplicateGroup } from '../types'
 import { ChannelLogo } from './ChannelLogo'
 
@@ -17,6 +18,7 @@ interface DuplicatesModalProps {
 }
 
 export function DuplicatesModal({ ignored, onIgnore, onClose }: DuplicatesModalProps) {
+  const { t } = useI18n()
   const client = useQueryClient()
   const { data, isLoading } = useDuplicates()
   const [deleting, setDeleting] = useState<string | null>(null)
@@ -61,7 +63,7 @@ export function DuplicatesModal({ ignored, onIgnore, onClose }: DuplicatesModalP
               <AlertTriangle className="h-4.5 w-4.5 h-[18px] w-[18px] text-amber-400" />
             </div>
             <div>
-              <h2 className="text-[14px] font-semibold text-white">Possible duplicates</h2>
+              <h2 className="text-[14px] font-semibold text-white">{t('possible_duplicates')}</h2>
               <p className="mt-0.5 font-mono text-[10px] text-fog-100/50">
                 {isLoading
                   ? 'analyzing…'
@@ -91,8 +93,8 @@ export function DuplicatesModal({ ignored, onIgnore, onClose }: DuplicatesModalP
               <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-500/10">
                 <AlertTriangle className="h-5 w-5 text-emerald-400 opacity-60" />
               </div>
-              <p className="text-sm font-medium text-fog-200">No duplicates found</p>
-              <p className="text-xs text-fog-100/50">All channels are unique</p>
+              <p className="text-sm font-medium text-fog-200">{t('no_duplicates')}</p>
+              <p className="text-xs text-fog-100/50">{t('all_unique')}</p>
             </div>
           ) : (
             <AnimatePresence initial={false}>

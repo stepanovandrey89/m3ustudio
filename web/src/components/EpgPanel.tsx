@@ -4,6 +4,7 @@ import { CalendarClock, CircleDot, History, Loader2, Minus, Play, Plus, RotateCc
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../lib/api'
 import { cn } from '../lib/cn'
+import { useI18n } from '../lib/i18n'
 import type { Programme } from '../types'
 
 /**
@@ -54,11 +55,14 @@ export function EpgPanel({ channelId, catchupDays, archiveProgramme, epgOffsetSe
     return data?.current_index ?? null
   }, [archiveProgramme, data?.programmes, data?.current_index])
 
+  const { t } = useI18n()
+
   const placeholder = (body: React.ReactNode) => (
     <Shell
       catchupDays={catchupDays}
       count={data?.programmes.length ?? 0}
       onClose={onClose}
+      t={t}
     >
       <div className="flex flex-1 items-center justify-center p-6 text-center text-xs text-fog-100/60">
         {body}
@@ -70,7 +74,7 @@ export function EpgPanel({ channelId, catchupDays, archiveProgramme, epgOffsetSe
     return placeholder(
       <span className="flex items-center gap-2">
         <Loader2 className="h-3.5 w-3.5 animate-spin" />
-        Loading guide…
+        {t('loading_guide')}
       </span>,
     )
   }
@@ -82,12 +86,12 @@ export function EpgPanel({ channelId, catchupDays, archiveProgramme, epgOffsetSe
       data.loading ? (
         <span className="flex items-center gap-2">
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          Preparing guide…
+          {t('preparing_guide')}
         </span>
       ) : (
         <span className="flex items-center gap-2">
           <CalendarClock className="h-3.5 w-3.5" />
-          Guide unavailable
+          {t('guide_unavailable')}
         </span>
       ),
     )
@@ -97,13 +101,13 @@ export function EpgPanel({ channelId, catchupDays, archiveProgramme, epgOffsetSe
     return placeholder(
       <span className="flex items-center gap-2 text-fog-100/50">
         <CalendarClock className="h-3.5 w-3.5" />
-        No guide available for this channel
+        {t('no_guide')}
       </span>,
     )
   }
 
   return (
-    <Shell catchupDays={catchupDays} count={data.programmes.length} offsetSec={epgOffsetSec} onOffsetChange={onOffsetChange} onClose={onClose}>
+    <Shell catchupDays={catchupDays} count={data.programmes.length} offsetSec={epgOffsetSec} onOffsetChange={onOffsetChange} onClose={onClose} t={t}>
       <FullDayList
         programmes={data.programmes}
         currentIndex={activeIndex}
@@ -123,15 +127,16 @@ interface ShellProps {
   onOffsetChange?: (sec: number) => void
   children: React.ReactNode
   onClose?: () => void
+  t: (key: string) => string
 }
 
-function Shell({ catchupDays, count, offsetSec = 0, onOffsetChange, children, onClose }: ShellProps) {
+function Shell({ catchupDays, count, offsetSec = 0, onOffsetChange, children, onClose, t }: ShellProps) {
   return (
     <div className="flex h-full min-h-0 flex-col bg-black/20">
       <div className="flex shrink-0 items-center justify-between border-b border-white/5 px-4 py-3">
         <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-fog-100/75">
           <CalendarClock className="h-3 w-3" />
-          TV Guide
+          {t('tv_guide')}
         </div>
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-3 font-mono text-[10px] tabnum text-fog-100/50">
@@ -169,7 +174,7 @@ function Shell({ catchupDays, count, offsetSec = 0, onOffsetChange, children, on
             'min-w-[52px] text-center font-mono text-[10px] tabnum',
             offsetSec !== 0 ? 'text-[var(--color-amber-primary)]' : 'text-fog-100/40',
           )}>
-            {offsetSec === 0 ? 'offset' : offsetSec > 0 ? `−${fmtOffsetShort(offsetSec)}` : `+${fmtOffsetShort(-offsetSec)}`}
+            {offsetSec === 0 ? t('offset') : offsetSec > 0 ? `−${fmtOffsetShort(offsetSec)}` : `+${fmtOffsetShort(-offsetSec)}`}
           </span>
           <button type="button" onClick={() => onOffsetChange(offsetSec - 300)}
             className="flex h-5 w-5 items-center justify-center rounded-full text-fog-100/25 transition hover:bg-white/15 hover:text-white"

@@ -76,4 +76,36 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ order }),
     }),
+  getLogoRegistry: (page = 1, perPage = 50, q = '', status = '') =>
+    request<LogoRegistryResponse>(
+      `/api/logos/registry?page=${page}&per_page=${perPage}&q=${encodeURIComponent(q)}&status=${status}`,
+    ),
+  retryLogo: (channelId: string) =>
+    request<{ ok: boolean; found: boolean }>(`/api/logos/retry/${encodeURIComponent(channelId)}`, { method: 'POST' }),
+  retryAllLogos: () =>
+    request<{ ok: boolean; reset: number }>('/api/logos/retry-all', { method: 'POST' }),
+  skipLogo: (channelId: string) =>
+    request<{ ok: boolean }>(`/api/logos/skip/${encodeURIComponent(channelId)}`, { method: 'POST' }),
+  overrideLogo: (channelId: string, url: string) =>
+    request<{ ok: boolean }>(`/api/logos/override/${encodeURIComponent(channelId)}?url=${encodeURIComponent(url)}`, { method: 'POST' }),
+}
+
+export interface LogoRegistryItem {
+  id: string
+  name: string
+  epg_url: string
+  source: string
+  status: 'found' | 'missing' | 'pending' | 'skipped'
+  attempts: number
+  cached: boolean
+}
+
+export interface LogoRegistryResponse {
+  items: LogoRegistryItem[]
+  total: number
+  page: number
+  pages: number
+  found: number
+  missing: number
+  pending: number
 }

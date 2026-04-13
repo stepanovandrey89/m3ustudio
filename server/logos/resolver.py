@@ -217,6 +217,18 @@ class LogoResolver:
     def has_cached(self, name: str) -> bool:
         return self.cached_bytes(_fs_slug(name)) is not None
 
+    def clear_miss(self, name: str) -> None:
+        """Remove a name from the miss cache so resolve() retries it."""
+        slug = _fs_slug(name)
+        self._misses.discard(slug)
+
+    def save_to_cache(self, name: str, data: bytes) -> None:
+        """Manually save logo bytes to the on-disk cache."""
+        slug = _fs_slug(name)
+        if slug:
+            self.cache_path(slug).write_bytes(data)
+            self._misses.discard(slug)
+
     async def resolve(self, name: str) -> bytes | None:
         slug = _fs_slug(name)
         if not slug:
