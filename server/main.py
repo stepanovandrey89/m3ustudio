@@ -471,9 +471,7 @@ def export_playlist(lang: str = Query(default="ru")) -> PlainTextResponse:
     channels = _state.playlist.channels
     # Translate group names when exporting in a different language.
     if lang != "ru":
-        channels = tuple(
-            ch.with_group(_translate_group(ch.group, lang)) for ch in channels
-        )
+        channels = tuple(ch.with_group(_translate_group(ch.group, lang)) for ch in channels)
     text = build_with_main_group(
         header=_state.playlist.header,
         all_channels=channels,
@@ -731,10 +729,12 @@ def get_duplicates() -> JSONResponse:
 @app.get("/api/logos/status")
 def logos_status() -> JSONResponse:
     """Return whether the background logo warming task has finished."""
-    return JSONResponse({
-        "warmed": _warming_done,
-        **_state.logo_registry.stats(),
-    })
+    return JSONResponse(
+        {
+            "warmed": _warming_done,
+            **_state.logo_registry.stats(),
+        }
+    )
 
 
 @app.get("/api/logos/registry")
@@ -748,9 +748,7 @@ def get_logo_registry(
     from dataclasses import asdict
 
     entries = _state.logo_registry.all_entries()
-    items = [
-        {"id": cid, **asdict(entry)} for cid, entry in entries.items()
-    ]
+    items = [{"id": cid, **asdict(entry)} for cid, entry in entries.items()]
 
     # Filter by status
     if status:
@@ -769,13 +767,15 @@ def get_logo_registry(
     start = (page - 1) * per_page
     page_items = items[start : start + per_page]
 
-    return JSONResponse({
-        "items": page_items,
-        "total": total,
-        "page": page,
-        "pages": max(1, (total + per_page - 1) // per_page),
-        **_state.logo_registry.stats(),
-    })
+    return JSONResponse(
+        {
+            "items": page_items,
+            "total": total,
+            "page": page,
+            "pages": max(1, (total + per_page - 1) // per_page),
+            **_state.logo_registry.stats(),
+        }
+    )
 
 
 @app.post("/api/logos/retry/{channel_id}")

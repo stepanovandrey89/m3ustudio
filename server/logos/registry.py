@@ -46,9 +46,9 @@ class LogoRegistry:
         try:
             raw = json.loads(self._path.read_text(encoding="utf-8"))
             for cid, data in raw.items():
-                self._entries[cid] = LogoEntry(**{
-                    k: v for k, v in data.items() if k in LogoEntry.__dataclass_fields__
-                })
+                self._entries[cid] = LogoEntry(
+                    **{k: v for k, v in data.items() if k in LogoEntry.__dataclass_fields__}
+                )
         except (OSError, json.JSONDecodeError, TypeError):
             pass
 
@@ -69,22 +69,16 @@ class LogoRegistry:
         with self._lock:
             return dict(self._entries)
 
-    def ensure_channel(
-        self, channel_id: str, name: str, epg_url: str = ""
-    ) -> LogoEntry:
+    def ensure_channel(self, channel_id: str, name: str, epg_url: str = "") -> LogoEntry:
         """Create entry if missing; never overwrite existing."""
         with self._lock:
             if channel_id not in self._entries:
-                self._entries[channel_id] = LogoEntry(
-                    name=name, epg_url=epg_url
-                )
+                self._entries[channel_id] = LogoEntry(name=name, epg_url=epg_url)
             elif epg_url and not self._entries[channel_id].epg_url:
                 self._entries[channel_id].epg_url = epg_url
             return self._entries[channel_id]
 
-    def mark_found(
-        self, channel_id: str, source: str
-    ) -> None:
+    def mark_found(self, channel_id: str, source: str) -> None:
         with self._lock:
             e = self._entries.get(channel_id)
             if e:
@@ -103,13 +97,9 @@ class LogoRegistry:
                     e.status = "missing"
                 self._persist()
 
-    def mark_manual(
-        self, channel_id: str, name: str
-    ) -> None:
+    def mark_manual(self, channel_id: str, name: str) -> None:
         with self._lock:
-            e = self._entries.setdefault(
-                channel_id, LogoEntry(name=name)
-            )
+            e = self._entries.setdefault(channel_id, LogoEntry(name=name))
             e.status = "found"
             e.source = "manual"
             e.cached = True
