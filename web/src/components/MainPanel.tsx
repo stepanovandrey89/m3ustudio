@@ -11,7 +11,7 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { CheckSquare, GripVertical, Sparkles, Square, Trash2, X } from 'lucide-react'
 import { useCallback, useMemo, useRef } from 'react'
 import { cn } from '../lib/cn'
-import { useI18n } from '../lib/i18n'
+import { useI18n, translateGroup } from '../lib/i18n'
 import { useIsMobile } from '../hooks/useIsMobile'
 import type { Channel } from '../types'
 import { ChannelLogo } from './ChannelLogo'
@@ -192,6 +192,7 @@ function SortableRow({
   onRemove,
   onPreview,
 }: SortableRowProps) {
+  const { lang } = useI18n()
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: channel.id, data: { type: 'main-channel' } })
 
@@ -272,7 +273,7 @@ function SortableRow({
       <div className="min-w-0 flex-1">
         <p className="truncate text-[13.5px] font-medium text-white">{channel.name}</p>
         <p className="mt-0.5 truncate text-[11px] text-fog-100/50">
-          {channel.group}
+          {translateGroup(channel.group, lang)}
           {channel.tvg_id && ` · ${channel.tvg_id}`}
         </p>
       </div>

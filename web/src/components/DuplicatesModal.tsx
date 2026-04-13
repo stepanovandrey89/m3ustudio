@@ -66,10 +66,10 @@ export function DuplicatesModal({ ignored, onIgnore, onClose }: DuplicatesModalP
               <h2 className="text-[14px] font-semibold text-white">{t('possible_duplicates')}</h2>
               <p className="mt-0.5 font-mono text-[10px] text-fog-100/50">
                 {isLoading
-                  ? 'analyzing…'
+                  ? t('analyzing')
                   : groups.length === 0
-                    ? 'no duplicates found'
-                    : `${groups.length} group${groups.length !== 1 ? 's' : ''} · ${totalChannels} channels`}
+                    ? t('no_duplicates')
+                    : `${groups.length} · ${totalChannels} ${t('channels')}`}
               </p>
             </div>
           </div>
@@ -117,7 +117,7 @@ export function DuplicatesModal({ ignored, onIgnore, onClose }: DuplicatesModalP
         {groups.length > 0 && (
           <div className="border-t border-white/5 px-5 py-3">
             <p className="text-[11px] text-fog-100/40">
-              Deletion removes the channel from the source permanently. Keep the best quality.
+              {t('deletion_warning')}
             </p>
           </div>
         )}
@@ -134,6 +134,7 @@ interface DuplicateGroupCardProps {
 }
 
 function DuplicateGroupCard({ group, deleting, onDelete, onIgnore }: DuplicateGroupCardProps) {
+  const { t } = useI18n()
   return (
     <motion.div
       layout
@@ -156,19 +157,19 @@ function DuplicateGroupCard({ group, deleting, onDelete, onIgnore }: DuplicateGr
               : 'bg-amber-500/10 text-amber-400',
           )}
         >
-          {group.reason === 'tvg_id' ? 'tvg_id' : 'similar name'}
+          {group.reason === 'tvg_id' ? 'tvg_id' : t('similar_name')}
         </span>
         <button
           type="button"
           onClick={onIgnore}
-          title="Dismiss — don't show again"
+          title={t('dismiss_title')}
           className={cn(
             'flex shrink-0 items-center gap-1 rounded-md border border-white/10 px-2 py-0.5 text-[10px] font-medium text-fog-100/40 transition',
             'hover:border-white/20 hover:bg-white/5 hover:text-fog-100/70',
           )}
         >
           <EyeOff className="h-3 w-3" />
-          Dismiss
+          {t('dismiss')}
         </button>
       </div>
 
@@ -187,15 +188,12 @@ function DuplicateGroupCard({ group, deleting, onDelete, onIgnore }: DuplicateGr
   )
 }
 
-function ChannelRow({
-  channel,
-  deleting,
-  onDelete,
-}: {
+function ChannelRow({ channel, deleting, onDelete }: {
   channel: Channel
   deleting: boolean
   onDelete: () => void
 }) {
+  const { t } = useI18n()
   return (
     <li className="group/row flex items-center gap-3 px-3 py-2.5 transition-colors hover:bg-white/[0.03]">
       <ChannelLogo id={channel.id} name={channel.name} hasLogo={channel.has_logo} size={30} />
@@ -214,7 +212,7 @@ function ChannelRow({
         type="button"
         onClick={onDelete}
         disabled={deleting}
-        title="Remove from source"
+        title={t('remove_from_source')}
         className={cn(
           'flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border transition',
           'border-transparent text-fog-100/20',
