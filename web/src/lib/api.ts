@@ -45,7 +45,7 @@ export const api = {
     ),
   transcodeManifestUrl: (channelId: string) =>
     `/api/transcode/${encodeURIComponent(channelId)}/index.m3u8`,
-  exportUrl: () => '/api/export.m3u8',
+  exportUrl: (lang = 'ru') => `/api/export.m3u8?lang=${lang}`,
   exportNamesUrl: () => '/api/export/names.txt',
   logoUrl: (channelId: string) => `/api/logo/${channelId}?v=2`,
   proxyUrl: (upstream: string) =>

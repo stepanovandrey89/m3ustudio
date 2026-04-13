@@ -21,7 +21,7 @@ interface HeaderProps {
 
 export function Header({ duplicatesCount, theme, onToggleTheme, onReload, onShowDuplicates, onRefetchData }: HeaderProps) {
   const isMobile = useIsMobile()
-  const { t } = useI18n()
+  const { t, lang } = useI18n()
   const [clearing, setClearing] = useState(false)
   const [showImportDialog, setShowImportDialog] = useState(false)
   const [showDefaultOrderDialog, setShowDefaultOrderDialog] = useState(false)
@@ -141,7 +141,7 @@ export function Header({ duplicatesCount, theme, onToggleTheme, onReload, onShow
 
               {/* Export */}
               <a
-                href={api.exportUrl()}
+                href={api.exportUrl(lang)}
                 download="playlist_main.m3u8"
                 onClick={() => setShowSettingsMenu(false)}
                 className="flex items-center gap-3 px-4 py-3 text-[13px] text-fog-200 transition hover:bg-white/5 hover:text-white"

@@ -49,6 +49,35 @@ STATIC_DIST = PROJECT_ROOT / "web" / "dist"
 
 MAIN_GROUP_NAME = "Основное"
 
+# Group name translation for export — mirrors web/src/lib/i18n.tsx
+_KEEP_AS_IS = {"4K", "UHD", "HD", "FHD", "SD"}
+_GROUP_RU_TO_EN: dict[str, str] = {
+    "Основное": "Main",
+    "Кино": "Movies",
+    "Сериалы": "Series",
+    "Спорт": "Sport",
+    "Новости": "News",
+    "Детские": "Kids",
+    "Музыка": "Music",
+    "Развлекательные": "Entertainment",
+    "Познавательные": "Educational",
+    "Взрослые": "Adults",
+    "Региональные": "Regional",
+    "Другие": "Other",
+    "Прочие": "Misc",
+    "Федеральные": "Federal",
+    "Документальные": "Documentary",
+}
+_GROUP_EN_TO_RU: dict[str, str] = {v: k for k, v in _GROUP_RU_TO_EN.items()}
+
+
+def _translate_group(name: str, lang: str) -> str:
+    if name.upper() in _KEEP_AS_IS:
+        return name
+    if lang == "en":
+        return _GROUP_RU_TO_EN.get(name, name)
+    return _GROUP_EN_TO_RU.get(name, name)
+
 
 # ---------------------------------------------------------------------------
 # DTOs
@@ -437,12 +466,19 @@ def export_names() -> PlainTextResponse:
 
 
 @app.get("/api/export.m3u8")
-def export_playlist() -> PlainTextResponse:
+def export_playlist(lang: str = Query(default="ru")) -> PlainTextResponse:
+    main_group = _translate_group(MAIN_GROUP_NAME, lang)
+    channels = _state.playlist.channels
+    # Translate group names when exporting in a different language.
+    if lang != "ru":
+        channels = tuple(
+            ch.with_group(_translate_group(ch.group, lang)) for ch in channels
+        )
     text = build_with_main_group(
         header=_state.playlist.header,
-        all_channels=_state.playlist.channels,
+        all_channels=channels,
         main_ids=_state.store.current_ids(),
-        group_name=MAIN_GROUP_NAME,
+        group_name=main_group,
         original_groups=_state.store.original_groups_map(),
         group_order=_state.store.get_group_order(),
     )
