@@ -2,9 +2,9 @@
 
 **Title options** (pick one):
 
-1. I built a self-hosted IPTV m3u8 playlist editor with drag-and-drop, HLS player and EPG
-2. m3u Studio — a local web UI for editing your IPTV playlist (FastAPI + React, Docker)
-3. Tired of editing m3u8 files by hand — so I made a drag-and-drop editor with live HLS preview
+1. I vibe-coded an IPTV playlist editor with Claude Code to fix the one thing I hated about m3u8 — channel sorting
+2. m3u Studio — self-hosted IPTV playlist editor with drag-and-drop, HLS player, EPG (built with AI)
+3. After years of re-sorting a 600-channel m3u8 by hand, I shipped an editor — Claude Code wrote most of it
 
 **Flair**: Release / Self-Promotion (check sub rules)
 
@@ -12,44 +12,32 @@
 
 ## Body
 
-Hey r/selfhosted 👋
+Hi r/selfhosted 👋
 
-I wrote a small self-hosted tool for people who curate their own IPTV
-playlists: **m3u Studio**. It's a local web UI that parses your `.m3u8` file,
-lets you drag-and-drop channels into a curated "main" list, preview anything
-live in a built-in HLS player, and export a cleaned-up playlist.
+I had a pain I'd been ignoring for years: every IPTV provider ships a 600+ channel m3u8 and **nothing in it is sorted**. Favourites are scattered. `Спорт`, `Кино`, `4K` are dumped in arbitrary order. Renaming a group means hand-editing `#EXTINF` lines. Swap providers — start over.
 
-**GitHub**: https://github.com/stepanovandrey89/m3ustudio
+Last week I sat down with Claude Code and we shipped **m3u Studio** — a local web editor that turned this chore into a two-click thing.
 
-### Why
+**GitHub**: https://github.com/stepanovandrey89/m3ustudio (MIT)
 
-I was tired of doing this in a text editor:
+Most of the code was AI-written. My job was mostly saying "no, that's wrong" and pasting screenshots until it stopped being wrong. ~10k LOC in about two weeks of evenings.
 
-- Reordering 90+ favourite channels by moving `#EXTINF` blocks around
-- Previewing streams to check they still work
-- Keeping logos and EPG in sync across providers
-- Repeating the whole curation when I switched providers
+### What it fixes
 
-So I built a tool that treats the playlist as a database and my curated
-ordering as state, independent of the source file.
-
-### Features
-
-- **Drag-and-drop** editor with multi-select, group rename, delete, cross-panel drag
-- **Built-in HLS player** (hls.js) with archive/catchup, keyboard shortcuts, fullscreen, record-to-MKV
-- **EPG integration** — loads an XMLTV guide, shows programmes with Today / Yesterday / Tomorrow headers, click to jump to archive position
-- **Automatic logo resolution** from iptv-org/database + tv-logo/tv-logos + EPG `<icon>` tags, cached locally
-- **Mirrored "Main" group** — the curated list is kept in sync on both sides: edit in the UI, and the source playlist file's `основное` group gets rewritten to match
-- **AC-3 → AAC transcode fallback** via ffmpeg for channels whose audio the browser refuses to decode
-- **Duplicate detection** across providers (groups near-identical names)
-- **Import / export** — upload new source, download curated playlist or channel name list
-- **Dark and light themes**, responsive mobile layout
+- **Drag-and-drop channel order** — build a curated "Main" list. Saved by name, not by stream URL, so your order survives provider swaps.
+- **Drag-and-drop group order** (`Спорт` ↔ `Кино` ↔ `Новости`) — persistent per-channel, applied to the exported `.m3u8` too.
+- **Sort inside groups** — Cyrillic А→Я first, then Latin A→Z (how Russian provider portals display them). Exact same order in the file you export.
+- **Main ↔ Source mirror** — edit either side, the other updates. The exported playlist has your `Основное` group in your order.
+- **Archive / catch-up with EPG** — click a past programme, it plays from there. Per-channel offset dial for providers whose EPG doesn't align with their actual archive (looking at you, Russian IPTV).
+- **Channel logos** — auto-resolved from iptv-org + tv-logos + EPG icons. Logo manager dialog shows status per channel, lets you retry failed, skip stubborn ones, or paste a URL manually.
+- **Duplicates detector** — finds near-identical channels across providers so you can drop the redundant ones before exporting.
+- **EN / RU UI** with automatic group-name translation on export.
 
 ### Stack
 
-- Backend: FastAPI, httpx, Pydantic v2
-- Frontend: React 19, TypeScript, Tailwind v4, `@dnd-kit`, Framer Motion, hls.js, TanStack Query
-- Optional: ffmpeg for transcode
+- FastAPI + httpx + Pydantic v2
+- React 19 + TypeScript + Tailwind v4 + `@dnd-kit` + hls.js + TanStack Query
+- Optional: ffmpeg (auto AC-3 → AAC remux for channels the browser refuses to decode)
 
 ### Install
 
@@ -59,8 +47,7 @@ cd m3ustudio
 docker compose up -d
 ```
 
-http://127.0.0.1:8000 — drop your playlist into `./data/playlist.m3u8` or
-upload from the UI.
+http://127.0.0.1:8000 — drop your `.m3u8` into `./data/` or upload from the UI.
 
 ### Screenshot
 
@@ -68,5 +55,4 @@ upload from the UI.
 
 ---
 
-Open to feedback, feature ideas, or "you should have used X instead" —
-it's MIT licensed and the codebase is small enough to hack on.
+Happy to answer questions about the code, the AI-assisted workflow, or "why not just use Kodi". Feedback welcome — it's still being polished.
