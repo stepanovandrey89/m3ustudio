@@ -84,7 +84,7 @@ def build_main_schedule(
     main_channels: list[Channel],
     past_hours: int = 2,
     future_hours: int = 22,
-    max_per_channel: int = 12,
+    max_per_channel: int | None = None,
     only_upcoming: bool = False,
 ) -> list[ChannelSchedule]:
     """Build a schedule snapshot for every Main channel.
@@ -93,19 +93,26 @@ def build_main_schedule(
     the digest never recommends a programme that has already aired. For the
     live chat we still include the current show (past_hours > 0) so the user
     can ask "what's on right now".
+
+    ``max_per_channel`` defaults to a value proportional to ``future_hours``
+    so that a wider window (e.g. 7-day deep-search) isn't silently clipped to
+    the digest's 12-entry budget. Pass an explicit int to override.
     """
     past = timedelta(hours=max(0, past_hours))
     future = timedelta(hours=max(1, future_hours))
+    # ~1 entry per hour of window, floor 12, so 12 h → 12, 168 h → 168.
+    if max_per_channel is None:
+        max_per_channel = max(12, future_hours)
     schedules: list[ChannelSchedule] = []
     now = datetime.now(UTC)
     for ch in main_channels:
         entries = _collect(guide, ch, past, future, max_per_channel)
         if only_upcoming:
-            # Strict upcoming window: programme must START at least 10 minutes
-            # from now and no more than 12 hours out. Anything currently airing
-            # is skipped — the user wants pure "what's next" recommendations.
+            # Programme must START at least 10 minutes from now, and no more
+            # than `future_hours` ahead. Anything currently airing is skipped
+            # — the user wants pure "what's next" recommendations.
             min_start = now + timedelta(minutes=10)
-            max_start = now + timedelta(hours=12)
+            max_start = now + future
             entries = tuple(e for e in entries if min_start <= e.start <= max_start)
         if not entries:
             continue
