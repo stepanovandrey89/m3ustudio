@@ -166,9 +166,7 @@ class RecordingManager:
         self._save(entry)
 
         async with self._lock:
-            task = asyncio.create_task(
-                self._run(entry.id, upstream_url, effective_start, duration)
-            )
+            task = asyncio.create_task(self._run(entry.id, upstream_url, effective_start, duration))
             self._tasks[entry.id] = task
         return entry
 
