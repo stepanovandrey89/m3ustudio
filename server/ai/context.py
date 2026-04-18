@@ -127,20 +127,37 @@ def build_main_schedule(
     return schedules
 
 
-def schedule_to_text(schedules: list[ChannelSchedule], lang: str = "ru") -> str:
-    """Flatten a schedule list into a compact prompt-friendly text block.
+def schedule_to_text(
+    schedules: list[ChannelSchedule],
+    lang: str = "ru",
+    compact: bool = False,
+) -> str:
+    """Flatten a schedule list into a prompt-friendly text block.
 
     The line format is structured so the model can copy ``start`` and ``stop``
     verbatim into its tool-call arguments. Keeping the full ISO-8601 string
     (with timezone offset) on every row is what lets the frontend countdown
     stay in sync — without it the model guesses a timezone and drifts by
     hours.
+
+    ``compact=True`` drops decorative fields (human-readable weekday/time,
+    duration, description) and keeps only the channel id, ISO start/stop, and
+    title. Used by the 7-day deep-search context where 149 channels × ~300
+    programmes per channel would otherwise blow past the OpenAI TPM limit.
     """
     if not schedules:
         return "(EPG пуст — нет программ)" if lang == "ru" else "(EPG empty — no programmes)"
 
     lines: list[str] = []
     for sch in schedules:
+        if compact:
+            # Short header: name + id only. Group label and brackets dropped.
+            lines.append(f"== {sch.channel_name} (id={sch.channel_id})")
+            for p in sch.programmes:
+                # start/stop + title. No description, no when/dur decoration.
+                lines.append(f"  start={p.start.isoformat()} stop={p.stop.isoformat()} · {p.title}")
+            lines.append("")
+            continue
         header = f"=== {sch.channel_name} [{sch.group}] (id={sch.channel_id})"
         lines.append(header)
         for p in sch.programmes:

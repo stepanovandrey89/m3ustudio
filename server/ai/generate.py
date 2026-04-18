@@ -114,7 +114,7 @@ async def stream_chat(
     wider window and must aggressively filter by the user's date/topic query
     instead of offering a generic "what's on tonight" list.
     """
-    epg_text = schedule_to_text(schedules, lang=lang)
+    epg_text = schedule_to_text(schedules, lang=lang, compact=deep)
     now_iso = datetime.now(UTC).isoformat()
     window_ru = "ближайшие 7 суток" if deep else "ближайшие 12 часов"
     window_en = "the next 7 days" if deep else "the next 12 hours"
