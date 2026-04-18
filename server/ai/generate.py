@@ -119,16 +119,26 @@ async def stream_chat(
     window_ru = "ближайшие 7 суток" if deep else "ближайшие 12 часов"
     window_en = "the next 7 days" if deep else "the next 12 hours"
     deep_hint_ru = (
-        "\nПользователь задал конкретный запрос (дата/событие/команда) — "
-        "отвечай ТОЛЬКО по передачам, которые ему соответствуют. "
-        "Не выдавай общий дайджест. Если в EPG ничего не подходит — честно скажи."
+        "\nПользователь включил глубокий поиск (дата/событие/команда/канал). "
+        "Отбирай только то, что реально совпадает с запросом. "
+        "Если спрашивают про рекомендации / «найди / покажи / что идёт» — "
+        "ВСЕГДА вызывай recommend_programme по каждой подходящей передаче "
+        "(как в обычном режиме): карточки с постером и кнопки «Запланировать» / "
+        "«Записать» должны появиться. Текстом отвечай только на чисто "
+        "фактологические вопросы («какая последняя дата EPG», «есть ли что-то "
+        "на канале X»). Если ничего не подходит — одно короткое предложение."
         if deep
         else ""
     )
     deep_hint_en = (
-        "\nThe user asked a specific question (date / event / team) — reply "
-        "ONLY with programmes that match it. Do not dump a generic digest. "
-        "If nothing in the EPG fits, say so honestly."
+        "\nThe user turned on deep search (date / event / team / channel). "
+        "Include only programmes that actually match the query. "
+        "For recommendation-style questions ('find / show / what's on') you "
+        "MUST still call recommend_programme for every matching programme — "
+        "poster cards with Plan / Record buttons are expected, same as in the "
+        "regular mode. Reply in plain text only for purely factual questions "
+        "('what's the last EPG date', 'does channel X have anything'). "
+        "If nothing matches, answer with one short sentence."
         if deep
         else ""
     )
