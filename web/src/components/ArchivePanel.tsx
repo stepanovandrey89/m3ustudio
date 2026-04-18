@@ -5,6 +5,8 @@ import {
   Download,
   Film,
   Loader2,
+  Pause,
+  Play,
   PlayCircle,
   Sparkles,
   Trash2,
@@ -117,6 +119,28 @@ export function ArchivePanel() {
     }
   }
 
+  async function handlePause(rec: Recording) {
+    try {
+      await api.pauseRecording(rec.id)
+      setItems((prev) =>
+        prev.map((r) => (r.id === rec.id ? { ...r, status: 'paused' } : r)),
+      )
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  async function handleResume(rec: Recording) {
+    try {
+      await api.resumeRecording(rec.id)
+      setItems((prev) =>
+        prev.map((r) => (r.id === rec.id ? { ...r, status: 'running' } : r)),
+      )
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col px-4 pb-8 pt-6 sm:px-6">
       <div className="flex items-end justify-between gap-3 pb-6">
@@ -189,6 +213,8 @@ export function ArchivePanel() {
               onPlay={() => setPlaying(rec)}
               onDelete={() => handleDelete(rec)}
               onCancel={() => handleCancel(rec)}
+              onPause={() => handlePause(rec)}
+              onResume={() => handleResume(rec)}
             />
           ))}
         </div>
@@ -214,18 +240,23 @@ function RecordingCard({
   onPlay,
   onDelete,
   onCancel,
+  onPause,
+  onResume,
 }: {
   rec: Recording
   index: number
   onPlay: () => void
   onDelete: () => void
   onCancel: () => void
+  onPause: () => void
+  onResume: () => void
 }) {
   const { t } = useI18n()
   const theme = toTheme(rec.theme)
   const Icon = THEME_ICONS[theme]
   const accent = THEME_ACCENTS[theme]
-  const isPlayable = rec.status === 'done'
+  const isPlayable = rec.status === 'done' || rec.status === 'paused'
+  const poster = rec.poster_url || ''
 
   return (
     <motion.article
@@ -234,19 +265,31 @@ function RecordingCard({
       transition={{ duration: 0.35, delay: index * 0.04 }}
       className="group relative flex h-[230px] flex-col overflow-hidden rounded-3xl border border-white/10 bg-white/[0.02] transition hover:border-white/25"
     >
-      {/* Background */}
+      {/* Background — real poster if available, gradient+logo fallback otherwise */}
       <div className="absolute inset-0">
         <div className={cn('absolute inset-0 bg-gradient-to-br opacity-80', accent)} />
-        <img
-          src={api.logoUrl(rec.channel_id)}
-          alt=""
-          aria-hidden
-          className="absolute inset-0 h-full w-full scale-150 object-contain opacity-25 blur-2xl"
-          onError={(e) => {
-            ;(e.currentTarget as HTMLImageElement).style.display = 'none'
-          }}
-        />
-        <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/20 to-transparent" />
+        {poster ? (
+          <img
+            src={poster}
+            alt=""
+            aria-hidden
+            className="absolute inset-0 h-full w-full object-cover opacity-55"
+            onError={(e) => {
+              ;(e.currentTarget as HTMLImageElement).style.display = 'none'
+            }}
+          />
+        ) : (
+          <img
+            src={api.logoUrl(rec.channel_id)}
+            alt=""
+            aria-hidden
+            className="absolute inset-0 h-full w-full scale-150 object-contain opacity-25 blur-2xl"
+            onError={(e) => {
+              ;(e.currentTarget as HTMLImageElement).style.display = 'none'
+            }}
+          />
+        )}
+        <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/40 to-black/10" />
       </div>
 
       <div className="relative flex flex-1 flex-col justify-between p-5">
@@ -263,8 +306,8 @@ function RecordingCard({
             {rec.title}
           </h3>
           <div className="mt-1 text-[11.5px] text-white/60">{rec.channel_name}</div>
-          <div className="mt-3 flex items-center gap-2">
-            {isPlayable ? (
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            {rec.status === 'done' && (
               <>
                 <button
                   type="button"
@@ -290,16 +333,58 @@ function RecordingCard({
                   <Trash2 className="h-3.5 w-3.5" />
                 </button>
               </>
-            ) : rec.status === 'failed' ? (
-              <button
-                type="button"
-                onClick={onDelete}
-                className="flex items-center gap-1.5 rounded-full border border-white/20 bg-black/30 px-3 py-1.5 text-[12px] text-white/80 transition hover:text-white"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-                {t('archive_delete')}
-              </button>
-            ) : (
+            )}
+            {rec.status === 'running' && (
+              <>
+                <button
+                  type="button"
+                  onClick={onPause}
+                  className="flex items-center gap-1.5 rounded-full border border-white/25 bg-black/40 px-3 py-1.5 text-[12px] text-white/90 backdrop-blur-sm transition hover:bg-black/60 hover:text-white"
+                >
+                  <Pause className="h-3.5 w-3.5" />
+                  {t('archive_pause')}
+                </button>
+                <button
+                  type="button"
+                  onClick={onCancel}
+                  className="flex items-center gap-1.5 rounded-full border border-white/20 bg-black/30 px-3 py-1.5 text-[12px] text-white/80 transition hover:border-[var(--color-rose-primary)]/40 hover:text-[var(--color-rose-primary)]"
+                >
+                  <X className="h-3.5 w-3.5" />
+                  {t('archive_cancel')}
+                </button>
+              </>
+            )}
+            {rec.status === 'paused' && (
+              <>
+                <button
+                  type="button"
+                  onClick={onResume}
+                  className="flex items-center gap-1.5 rounded-full bg-[var(--color-amber-primary)]/90 px-3 py-1.5 text-[12px] font-medium text-black transition hover:bg-[var(--color-amber-primary)]"
+                >
+                  <Play className="h-3.5 w-3.5" />
+                  {t('archive_resume')}
+                </button>
+                {isPlayable && (
+                  <button
+                    type="button"
+                    onClick={onPlay}
+                    title={t('archive_play')}
+                    className="flex h-7 w-7 items-center justify-center rounded-full border border-white/20 bg-black/30 text-white/80 backdrop-blur-sm transition hover:border-white/40 hover:text-white"
+                  >
+                    <PlayCircle className="h-3.5 w-3.5" />
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={onCancel}
+                  className="ml-auto flex items-center gap-1.5 rounded-full border border-white/20 bg-black/30 px-3 py-1.5 text-[12px] text-white/80 transition hover:border-[var(--color-rose-primary)]/40 hover:text-[var(--color-rose-primary)]"
+                >
+                  <X className="h-3.5 w-3.5" />
+                  {t('archive_cancel')}
+                </button>
+              </>
+            )}
+            {rec.status === 'queued' && (
               <button
                 type="button"
                 onClick={onCancel}
@@ -307,6 +392,16 @@ function RecordingCard({
               >
                 <X className="h-3.5 w-3.5" />
                 {t('archive_cancel')}
+              </button>
+            )}
+            {rec.status === 'failed' && (
+              <button
+                type="button"
+                onClick={onDelete}
+                className="flex items-center gap-1.5 rounded-full border border-white/20 bg-black/30 px-3 py-1.5 text-[12px] text-white/80 transition hover:text-white"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                {t('archive_delete')}
               </button>
             )}
           </div>
@@ -327,6 +422,14 @@ function StatusPill({ status }: { status: Recording['status'] }) {
           className="h-2 w-2 rounded-full bg-current"
         />
         {t('archive_running')}
+      </div>
+    )
+  }
+  if (status === 'paused') {
+    return (
+      <div className="flex items-center gap-1.5 rounded-full border border-[var(--color-amber-primary)]/40 bg-black/40 px-2 py-1 text-[11px] text-[var(--color-amber-primary)] backdrop-blur-sm">
+        <Pause className="h-2.5 w-2.5" />
+        {t('archive_paused')}
       </div>
     )
   }

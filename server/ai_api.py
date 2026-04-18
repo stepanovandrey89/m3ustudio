@@ -45,6 +45,8 @@ class RecordBody(BaseModel):
     start: str  # ISO
     stop: str
     theme: str = "other"
+    poster_keywords: str = ""
+    lang: str = "ru"
 
 
 class PlanBody(BaseModel):
@@ -203,6 +205,20 @@ def build_router(state: Any) -> APIRouter:  # noqa: ANN401 — state is the main
         ok = await recordings.cancel(rec_id)
         return JSONResponse({"ok": ok})
 
+    @router.post("/recordings/{rec_id}/pause")
+    async def pause_recording(rec_id: str) -> JSONResponse:
+        ok = await recordings.pause(rec_id)
+        if not ok:
+            raise HTTPException(400, "cannot pause")
+        return JSONResponse({"ok": True})
+
+    @router.post("/recordings/{rec_id}/resume")
+    async def resume_recording(rec_id: str) -> JSONResponse:
+        ok = await recordings.resume(rec_id)
+        if not ok:
+            raise HTTPException(400, "cannot resume")
+        return JSONResponse({"ok": True})
+
     @router.get("/recordings/{rec_id}/file")
     def recording_file(rec_id: str) -> FileResponse:
         entry = recordings.get(rec_id)
@@ -318,10 +334,21 @@ async def _tool_record(
     start: str,
     stop: str,
     theme: str = "other",
+    poster_keywords: str = "",
+    lang: str = "ru",
 ) -> dict[str, Any]:
     channel = state.playlist.by_id(channel_id)
     if channel is None:
         return {"ok": False, "error": f"unknown channel_id: {channel_id}"}
+    # Poster lookup is best-effort — a miss just leaves the card without art.
+    poster_url = ""
+    keywords = (poster_keywords or title).strip()
+    if keywords:
+        try:
+            hit = await state.posters.resolve(keywords, lang)
+            poster_url = hit.url if hit else ""
+        except Exception:  # noqa: BLE001
+            poster_url = ""
     try:
         entry = await state.recordings.schedule(
             channel_id=channel_id,
@@ -331,6 +358,7 @@ async def _tool_record(
             start=start,
             stop=stop,
             theme=theme,
+            poster_url=poster_url,
         )
     except ValueError as exc:
         return {"ok": False, "error": str(exc)}

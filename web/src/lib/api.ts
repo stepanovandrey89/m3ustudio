@@ -128,6 +128,14 @@ export const api = {
     request<{ ok: boolean }>(`/api/recordings/${encodeURIComponent(id)}/cancel`, {
       method: 'POST',
     }),
+  pauseRecording: (id: string) =>
+    request<{ ok: boolean }>(`/api/recordings/${encodeURIComponent(id)}/pause`, {
+      method: 'POST',
+    }),
+  resumeRecording: (id: string) =>
+    request<{ ok: boolean }>(`/api/recordings/${encodeURIComponent(id)}/resume`, {
+      method: 'POST',
+    }),
   recordingFileUrl: (id: string) => `/api/recordings/${encodeURIComponent(id)}/file`,
   // ── Plans ─────────────────────────────────────────────────────────────
   listPlans: () => request<PlansResponse>('/api/plans'),

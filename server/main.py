@@ -275,6 +275,10 @@ async def _startup() -> None:
     _state.transcode_cleanup_task = asyncio.create_task(run_cleanup_loop(_state.transcode))
     # Background scheduler fires Telegram alerts when planned programmes are about to start.
     _state.plan_scheduler_task = asyncio.create_task(run_scheduler_loop(_state.plans))
+    # Recording tasks live only in asyncio memory — resume anything still queued/running
+    # from disk so a restart mid-window doesn't silently drop scheduled ffmpeg captures.
+    with contextlib.suppress(Exception):
+        await _state.recordings.resume_pending()
 
 
 async def _load_epg_in_background() -> None:

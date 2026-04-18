@@ -94,7 +94,7 @@ export interface ChatMessage {
 
 // ─── Recordings ────────────────────────────────────────────────────────
 
-export type RecordingStatus = 'queued' | 'running' | 'done' | 'failed'
+export type RecordingStatus = 'queued' | 'running' | 'paused' | 'done' | 'failed'
 
 export interface Recording {
   id: string
@@ -108,6 +108,9 @@ export interface Recording {
   file: string
   bytes: number
   error: string
+  upstream_url?: string
+  poster_url?: string
+  parts?: string[]
   created_at: string
 }
 
