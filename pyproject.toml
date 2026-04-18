@@ -3,7 +3,7 @@ include = ["server*"]
 
 [project]
 name = "m3u-studio"
-version = "0.6.0"
+version = "0.7.0"
 description = "Local M3U playlist editor with drag-and-drop, live preview, and one-click export"
 requires-python = ">=3.12"
 dependencies = [
