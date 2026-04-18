@@ -58,6 +58,7 @@ interface AIAssistantProps {
 
 // v2: ToolEvent gained `call_id` for proper tool_result matching.
 const STORAGE_KEY = 'm3u_ai_chat_v2'
+const DEEP_MODE_KEY = 'm3u_ai_deep_mode'
 
 export function AIAssistant({ enabled, loadingStatus, onPlan, onRecord }: AIAssistantProps) {
   const { t, lang } = useI18n()
@@ -71,10 +72,26 @@ export function AIAssistant({ enabled, loadingStatus, onPlan, onRecord }: AIAssi
   })
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
-  // When true, the next user message is sent with deep_search:true so the
-  // backend expands the EPG window to 7 days. Activated by the "Хочу больше"
-  // chip and auto-resets after the response completes.
-  const [deepMode, setDeepMode] = useState(false)
+  // When true, user messages are sent with deep_search:true so the backend
+  // expands the EPG window to 7 days. Activated by the "Хочу больше" chip
+  // and persisted in localStorage so a page reload doesn't silently drop it
+  // while the clarification turn is still visible in the chat history.
+  const [deepMode, setDeepMode] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(DEEP_MODE_KEY) === '1'
+    } catch {
+      return false
+    }
+  })
+
+  useEffect(() => {
+    try {
+      if (deepMode) localStorage.setItem(DEEP_MODE_KEY, '1')
+      else localStorage.removeItem(DEEP_MODE_KEY)
+    } catch {
+      /* */
+    }
+  }, [deepMode])
   const abortRef = useRef<AbortController | null>(null)
   const inputRef = useRef<HTMLTextAreaElement | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -202,6 +219,7 @@ export function AIAssistant({ enabled, loadingStatus, onPlan, onRecord }: AIAssi
     setDeepMode(false)
     try {
       localStorage.removeItem(STORAGE_KEY)
+      localStorage.removeItem(DEEP_MODE_KEY)
     } catch {
       /* */
     }
