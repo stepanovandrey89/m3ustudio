@@ -37,6 +37,10 @@ class ChatMessage(BaseModel):
 class ChatBody(BaseModel):
     messages: list[ChatMessage]
     lang: str = Field(default="ru")
+    # When true, the chat request is allowed to pull 7 days of EPG instead of
+    # 12 h. Triggered by the "Хочу больше" chip in the UI so everyday chats
+    # don't pay the token cost of a week-wide schedule.
+    deep_search: bool = Field(default=False)
 
 
 class RecordBody(BaseModel):
@@ -140,17 +144,15 @@ def build_router(state: Any) -> APIRouter:  # noqa: ANN401 — state is the main
             raise HTTPException(503, "OPENAI_API_KEY is not configured")
 
         main_channels = _main_channels(state)
-        # Chat needs currently-airing + next 12h. `past_hours=0` drops
-        # programmes that have already finished so the assistant never
-        # speaks in the past tense; currently-airing shows are kept because
-        # their stop time is still in the future.
-        # Strict upcoming: start ≥ now+10min, start ≤ now+12h. The assistant
-        # must never talk about currently-airing or finished shows.
+        # Default chat scope: next 12 h, strictly upcoming. `deep_search`
+        # widens to 7 days for queries like "what's on Champions League next
+        # Tuesday" where the everyday window can't reach.
+        future_hours = 168 if body.deep_search else 12
         schedules = build_main_schedule(
             state.epg,
             main_channels,
             past_hours=0,
-            future_hours=12,
+            future_hours=future_hours,
             only_upcoming=True,
         )
         history = [m.model_dump() for m in body.messages]
@@ -163,7 +165,9 @@ def build_router(state: Any) -> APIRouter:  # noqa: ANN401 — state is the main
         )
 
         async def event_stream():
-            async for event in stream_chat(client, cfg, history, schedules, body.lang, tools):
+            async for event in stream_chat(
+                client, cfg, history, schedules, body.lang, tools, deep=body.deep_search
+            ):
                 if await request.is_disconnected():
                     break
                 payload = json.dumps(event, ensure_ascii=False, default=_json_safe)

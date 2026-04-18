@@ -101,24 +101,47 @@ async def stream_chat(
     schedules: list[ChannelSchedule],
     lang: str,
     tool_executor: ToolExecutor,
+    deep: bool = False,
 ) -> AsyncIterator[dict[str, Any]]:
     """Yield dict events for SSE: {type:'delta'|'tool'|'done'|'error', ...}.
 
     Supports a single round of function calls. When the model wants to call a
     tool we execute it, append the result, and continue streaming a second
     response that incorporates the tool output.
+
+    ``deep=True`` signals the caller passed a 7-day EPG slice (via the "Хочу
+    больше" chip). The system context is adjusted so the model knows it has a
+    wider window and must aggressively filter by the user's date/topic query
+    instead of offering a generic "what's on tonight" list.
     """
     epg_text = schedule_to_text(schedules, lang=lang)
     now_iso = datetime.now(UTC).isoformat()
+    window_ru = "ближайшие 7 суток" if deep else "ближайшие 12 часов"
+    window_en = "the next 7 days" if deep else "the next 12 hours"
+    deep_hint_ru = (
+        "\nПользователь задал конкретный запрос (дата/событие/команда) — "
+        "отвечай ТОЛЬКО по передачам, которые ему соответствуют. "
+        "Не выдавай общий дайджест. Если в EPG ничего не подходит — честно скажи."
+        if deep
+        else ""
+    )
+    deep_hint_en = (
+        "\nThe user asked a specific question (date / event / team) — reply "
+        "ONLY with programmes that match it. Do not dump a generic digest. "
+        "If nothing in the EPG fits, say so honestly."
+        if deep
+        else ""
+    )
     context_msg = {
         "role": "system",
         "content": (
             (
                 f"СЕЙЧАС (UTC): {now_iso}\n"
-                "EPG НИЖЕ — только передачи, идущие прямо сейчас или стартующие\n"
-                "в ближайшие 12 часов. Всё, что в этом блоке, ЕЩЁ НЕ ЗАКОНЧИЛОСЬ.\n"
+                f"EPG НИЖЕ — только передачи, идущие прямо сейчас или стартующие\n"
+                f"в {window_ru}. Всё, что в этом блоке, ЕЩЁ НЕ ЗАКОНЧИЛОСЬ.\n"
                 "Формат строк: `ДеньНед ЧЧ:ММ · длительность · Название — описание`\n"
-                "Для каждой передачи используй channel_id из `(id=...)` в заголовке.\n"
+                "Для каждой передачи используй channel_id из `(id=...)` в заголовке."
+                f"{deep_hint_ru}\n"
                 "=============== EPG START ===============\n"
                 f"{epg_text}\n"
                 "================ EPG END ================"
@@ -126,10 +149,11 @@ async def stream_chat(
             if lang == "ru"
             else (
                 f"NOW (UTC): {now_iso}\n"
-                "EPG BELOW contains only programmes airing right now or starting\n"
-                "within the next 12 hours. Nothing in this block has ended yet.\n"
+                f"EPG BELOW contains only programmes airing right now or starting\n"
+                f"within {window_en}. Nothing in this block has ended yet.\n"
                 "Line format: `WeekDay HH:MM · duration · Title — description`\n"
-                "For each programme use the channel_id from `(id=...)` in the header.\n"
+                "For each programme use the channel_id from `(id=...)` in the header."
+                f"{deep_hint_en}\n"
                 "=============== EPG START ===============\n"
                 f"{epg_text}\n"
                 "================ EPG END ================"

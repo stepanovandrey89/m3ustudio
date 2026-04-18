@@ -2,6 +2,7 @@ import { AnimatePresence, motion } from 'framer-motion'
 import {
   ArrowUp,
   BookmarkCheck,
+  CalendarSearch,
   Check,
   Clock,
   CircleStop,
@@ -70,7 +71,12 @@ export function AIAssistant({ enabled, loadingStatus, onPlan, onRecord }: AIAssi
   })
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
+  // When true, the next user message is sent with deep_search:true so the
+  // backend expands the EPG window to 7 days. Activated by the "Хочу больше"
+  // chip and auto-resets after the response completes.
+  const [deepMode, setDeepMode] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
+  const inputRef = useRef<HTMLTextAreaElement | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -114,10 +120,15 @@ export function AIAssistant({ enabled, loadingStatus, onPlan, onRecord }: AIAssi
           : { role: 'assistant', content: t.text },
       )
 
+      // Snapshot + reset deep mode BEFORE the request: single-shot scope so
+      // follow-up questions don't silently keep paying the 7-day token cost.
+      const useDeep = deepMode
+      setDeepMode(false)
+
       try {
         for await (const evt of sseStream<StreamEvent>('/api/ai/chat', {
           signal: controller.signal,
-          body: { messages, lang },
+          body: { messages, lang, deep_search: useDeep },
         })) {
           setTurns((all) =>
             all.map((t) =>
@@ -164,8 +175,25 @@ export function AIAssistant({ enabled, loadingStatus, onPlan, onRecord }: AIAssi
         )
       }
     },
-    [enabled, lang, streaming, turns],
+    [deepMode, enabled, lang, streaming, turns],
   )
+
+  // Handler for the "Хочу больше" chip — inject an assistant clarification
+  // message, arm deep mode, and hand focus back to the input so the user can
+  // type their specific question.
+  const askForDeepClarification = useCallback(() => {
+    if (streaming) return
+    const prompt: ChatTurn = {
+      id: `a-deep-${Date.now()}`,
+      role: 'assistant',
+      text: t('ai_deep_prompt'),
+      tools: [],
+      streaming: false,
+    }
+    setTurns((prev) => [...prev, prompt])
+    setDeepMode(true)
+    setTimeout(() => inputRef.current?.focus(), 50)
+  }, [streaming, t])
 
   const stop = useCallback(() => {
     abortRef.current?.abort()
@@ -181,10 +209,15 @@ export function AIAssistant({ enabled, loadingStatus, onPlan, onRecord }: AIAssi
     }
   }, [streaming, stop])
 
-  const suggestions = [
-    { icon: Trophy, key: 'ai_suggest_sport' },
-    { icon: Film, key: 'ai_suggest_cinema' },
-    { icon: Wand2, key: 'ai_suggest_random' },
+  const suggestions: {
+    icon: typeof Trophy
+    key: string
+    mode?: 'send' | 'deep'
+  }[] = [
+    { icon: Trophy, key: 'ai_suggest_sport', mode: 'send' },
+    { icon: Film, key: 'ai_suggest_cinema', mode: 'send' },
+    { icon: Wand2, key: 'ai_suggest_random', mode: 'send' },
+    { icon: CalendarSearch, key: 'ai_suggest_deep', mode: 'deep' },
   ]
 
   if (!enabled && !loadingStatus) {
@@ -244,14 +277,29 @@ export function AIAssistant({ enabled, loadingStatus, onPlan, onRecord }: AIAssi
             <div className="grid w-full gap-2 sm:grid-cols-2">
               {suggestions.map((s) => {
                 const Icon = s.icon
+                const isDeep = s.mode === 'deep'
                 return (
                   <button
                     key={s.key}
                     type="button"
-                    onClick={() => send(t(s.key))}
-                    className="group relative flex items-center gap-3 overflow-hidden rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-left transition hover:border-[var(--color-indigo-primary)]/40 hover:bg-white/[0.06]"
+                    onClick={() =>
+                      isDeep ? askForDeepClarification() : send(t(s.key))
+                    }
+                    className={cn(
+                      'group relative flex items-center gap-3 overflow-hidden rounded-2xl border px-4 py-3 text-left transition',
+                      isDeep
+                        ? 'border-[var(--color-amber-primary)]/30 bg-[var(--color-amber-primary)]/[0.06] hover:border-[var(--color-amber-primary)]/60 hover:bg-[var(--color-amber-primary)]/[0.1]'
+                        : 'border-white/10 bg-white/[0.03] hover:border-[var(--color-indigo-primary)]/40 hover:bg-white/[0.06]',
+                    )}
                   >
-                    <Icon className="h-4 w-4 shrink-0 text-[var(--color-indigo-primary)]" />
+                    <Icon
+                      className={cn(
+                        'h-4 w-4 shrink-0',
+                        isDeep
+                          ? 'text-[var(--color-amber-primary)]'
+                          : 'text-[var(--color-indigo-primary)]',
+                      )}
+                    />
                     <span className="text-[13px] text-fog-100">
                       {t(s.key)}
                     </span>
@@ -288,9 +336,29 @@ export function AIAssistant({ enabled, loadingStatus, onPlan, onRecord }: AIAssi
           e.preventDefault()
           void send(input)
         }}
-        className="glass-strong sticky bottom-2 z-10 mt-3 flex items-end gap-2 rounded-3xl border-white/10 px-3 py-2.5 shadow-[0_12px_32px_-16px_rgba(0,0,0,0.6)]"
+        className={cn(
+          'glass-strong sticky bottom-2 z-10 mt-3 flex items-end gap-2 rounded-3xl border px-3 py-2.5 shadow-[0_12px_32px_-16px_rgba(0,0,0,0.6)] transition',
+          deepMode
+            ? 'border-[var(--color-amber-primary)]/50'
+            : 'border-white/10',
+        )}
       >
+        {deepMode && (
+          <div className="pointer-events-none absolute -top-3 left-4 flex items-center gap-1.5 rounded-full border border-[var(--color-amber-primary)]/40 bg-black/80 px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.2em] text-[var(--color-amber-primary)] backdrop-blur">
+            <CalendarSearch className="h-3 w-3" />
+            {t('ai_deep_badge')}
+            <button
+              type="button"
+              onClick={() => setDeepMode(false)}
+              className="pointer-events-auto -mr-1 ml-1 text-[var(--color-amber-primary)]/70 transition hover:text-[var(--color-amber-primary)]"
+              aria-label="cancel deep mode"
+            >
+              ×
+            </button>
+          </div>
+        )}
         <textarea
+          ref={inputRef}
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {
@@ -299,7 +367,7 @@ export function AIAssistant({ enabled, loadingStatus, onPlan, onRecord }: AIAssi
               void send(input)
             }
           }}
-          placeholder={t('ai_placeholder')}
+          placeholder={deepMode ? t('ai_deep_placeholder') : t('ai_placeholder')}
           rows={1}
           disabled={!enabled}
           className="min-h-10 flex-1 resize-none bg-transparent px-3 py-2 text-[14px] text-fog-100 outline-none placeholder:text-fog-200/40 disabled:opacity-50"
