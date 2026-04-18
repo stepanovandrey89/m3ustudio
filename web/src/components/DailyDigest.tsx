@@ -2,9 +2,11 @@ import { AnimatePresence, motion } from 'framer-motion'
 import {
   BookmarkCheck,
   Check,
+  CheckCircle2,
   Clock,
   Film,
   Loader2,
+  PlayCircle,
   RefreshCw,
   Sparkles,
   Sunrise,
@@ -87,9 +89,10 @@ interface DailyDigestProps {
   enabled: boolean
   onPlan: (entry: DigestEntry, theme: DigestTheme) => void | Promise<void>
   onRecord: (entry: DigestEntry, theme: DigestTheme) => void | Promise<void>
+  onWatch: (entry: DigestEntry) => void
 }
 
-export function DailyDigest({ enabled, onPlan, onRecord }: DailyDigestProps) {
+export function DailyDigest({ enabled, onPlan, onRecord, onWatch }: DailyDigestProps) {
   const { t, lang } = useI18n()
   const [active, setActive] = useState<DigestTheme>('sport')
   // Seed local state from the module-level cache so a remount after
@@ -255,6 +258,7 @@ export function DailyDigest({ enabled, onPlan, onRecord }: DailyDigestProps) {
               accent={activeTheme.accent}
               onPlan={(e) => onPlan(e, active)}
               onRecord={(e) => onRecord(e, active)}
+              onWatch={onWatch}
             />
           ) : digest ? (
             <motion.div
@@ -278,11 +282,13 @@ function DigestGrid({
   accent,
   onPlan,
   onRecord,
+  onWatch,
 }: {
   items: DigestEntry[]
   accent: string
   onPlan: (entry: DigestEntry) => void | Promise<void>
   onRecord: (entry: DigestEntry) => void | Promise<void>
+  onWatch: (entry: DigestEntry) => void
 }) {
   return (
     <motion.div
@@ -300,6 +306,7 @@ function DigestGrid({
           index={index}
           onPlan={() => onPlan(entry)}
           onRecord={() => onRecord(entry)}
+          onWatch={() => onWatch(entry)}
         />
       ))}
     </motion.div>
@@ -312,12 +319,14 @@ function DigestCard({
   index,
   onPlan,
   onRecord,
+  onWatch,
 }: {
   entry: DigestEntry
   accent: string
   index: number
   onPlan: () => void | Promise<void>
   onRecord: () => void | Promise<void>
+  onWatch: () => void
 }) {
   const { lang, t } = useI18n()
   const start = useMemo(() => new Date(entry.start), [entry.start])
@@ -332,6 +341,13 @@ function DigestCard({
   const posterUrl = poster?.url ?? null
   const now = useNow(30_000)
   const countdown = formatCountdown(entry.start, now, lang)
+  // Programme phase drives which actions the card offers:
+  // - upcoming : start > now          → Plan + Record
+  // - live     : start <= now < stop  → Watch + Record
+  // - ended    : now >= stop          → "Уже прошло" badge, no actions
+  const nowMs = now.getTime()
+  const phase: 'upcoming' | 'live' | 'ended' =
+    nowMs >= stop.getTime() ? 'ended' : nowMs >= start.getTime() ? 'live' : 'upcoming'
   const [planState, setPlanState] = useState<'idle' | 'saving' | 'done'>('idle')
   const [recordState, setRecordState] = useState<'idle' | 'saving' | 'done'>('idle')
   const handlePlanClick = async () => {
@@ -450,54 +466,97 @@ function DigestCard({
           )}
         </div>
 
-        {/* Actions */}
+        {/* Actions — phase-aware */}
         <div className="flex items-center gap-2 pt-2">
-          <button
-            type="button"
-            onClick={handlePlanClick}
-            disabled={planState !== 'idle'}
-            aria-live="polite"
-            className={cn(
-              'flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] font-medium transition',
-              planState === 'done'
-                ? 'border border-[var(--color-cyan-primary)]/50 bg-[var(--color-cyan-primary)]/[0.15] text-[var(--color-cyan-primary)]'
-                : planState === 'saving'
-                  ? 'bg-white/60 text-black/70'
-                  : 'bg-white/90 text-black hover:bg-white',
-            )}
-          >
-            {planState === 'saving' ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : planState === 'done' ? (
-              <Check className="h-3.5 w-3.5" strokeWidth={3} />
-            ) : (
-              <BookmarkCheck className="h-3.5 w-3.5" />
-            )}
-            {planState === 'done' ? t('plans_status_scheduled') : t('digest_watch')}
-          </button>
-          <button
-            type="button"
-            onClick={handleRecordClick}
-            disabled={recordState !== 'idle'}
-            aria-live="polite"
-            className={cn(
-              'flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] backdrop-blur-sm transition',
-              recordState === 'done'
-                ? 'border border-[var(--color-cyan-primary)]/50 bg-[var(--color-cyan-primary)]/[0.15] text-[var(--color-cyan-primary)]'
-                : recordState === 'saving'
-                  ? 'border border-white/15 bg-black/30 text-white/60'
-                  : 'border border-white/20 bg-black/30 text-white/90 hover:border-white/40 hover:text-white',
-            )}
-          >
-            {recordState === 'saving' ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : recordState === 'done' ? (
-              <Check className="h-3.5 w-3.5" strokeWidth={3} />
-            ) : (
-              <Video className="h-3.5 w-3.5" />
-            )}
-            {recordState === 'done' ? t('archive_queued') : t('digest_record')}
-          </button>
+          {phase === 'ended' ? (
+            <div className="flex items-center gap-1.5 rounded-full border border-white/10 bg-black/30 px-3 py-1.5 text-[12px] text-white/50 backdrop-blur-sm">
+              <CheckCircle2 className="h-3.5 w-3.5" />
+              {t('digest_aired')}
+            </div>
+          ) : phase === 'live' ? (
+            <>
+              <button
+                type="button"
+                onClick={onWatch}
+                className="flex items-center gap-1.5 rounded-full bg-[var(--color-rose-primary)] px-3 py-1.5 text-[12px] font-medium text-white transition hover:brightness-110"
+              >
+                <PlayCircle className="h-3.5 w-3.5" />
+                {t('digest_watch_now')}
+              </button>
+              <button
+                type="button"
+                onClick={handleRecordClick}
+                disabled={recordState !== 'idle'}
+                aria-live="polite"
+                className={cn(
+                  'flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] backdrop-blur-sm transition',
+                  recordState === 'done'
+                    ? 'border border-[var(--color-cyan-primary)]/50 bg-[var(--color-cyan-primary)]/[0.15] text-[var(--color-cyan-primary)]'
+                    : recordState === 'saving'
+                      ? 'border border-white/15 bg-black/30 text-white/60'
+                      : 'border border-white/20 bg-black/30 text-white/90 hover:border-white/40 hover:text-white',
+                )}
+              >
+                {recordState === 'saving' ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : recordState === 'done' ? (
+                  <Check className="h-3.5 w-3.5" strokeWidth={3} />
+                ) : (
+                  <Video className="h-3.5 w-3.5" />
+                )}
+                {recordState === 'done' ? t('archive_queued') : t('digest_record')}
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={handlePlanClick}
+                disabled={planState !== 'idle'}
+                aria-live="polite"
+                className={cn(
+                  'flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] font-medium transition',
+                  planState === 'done'
+                    ? 'border border-[var(--color-cyan-primary)]/50 bg-[var(--color-cyan-primary)]/[0.15] text-[var(--color-cyan-primary)]'
+                    : planState === 'saving'
+                      ? 'bg-white/60 text-black/70'
+                      : 'bg-white/90 text-black hover:bg-white',
+                )}
+              >
+                {planState === 'saving' ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : planState === 'done' ? (
+                  <Check className="h-3.5 w-3.5" strokeWidth={3} />
+                ) : (
+                  <BookmarkCheck className="h-3.5 w-3.5" />
+                )}
+                {planState === 'done' ? t('plans_status_scheduled') : t('digest_watch')}
+              </button>
+              <button
+                type="button"
+                onClick={handleRecordClick}
+                disabled={recordState !== 'idle'}
+                aria-live="polite"
+                className={cn(
+                  'flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] backdrop-blur-sm transition',
+                  recordState === 'done'
+                    ? 'border border-[var(--color-cyan-primary)]/50 bg-[var(--color-cyan-primary)]/[0.15] text-[var(--color-cyan-primary)]'
+                    : recordState === 'saving'
+                      ? 'border border-white/15 bg-black/30 text-white/60'
+                      : 'border border-white/20 bg-black/30 text-white/90 hover:border-white/40 hover:text-white',
+                )}
+              >
+                {recordState === 'saving' ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : recordState === 'done' ? (
+                  <Check className="h-3.5 w-3.5" strokeWidth={3} />
+                ) : (
+                  <Video className="h-3.5 w-3.5" />
+                )}
+                {recordState === 'done' ? t('archive_queued') : t('digest_record')}
+              </button>
+            </>
+          )}
         </div>
       </div>
     </motion.article>

@@ -210,12 +210,64 @@ function App() {
     const channelId = params.get('watch')
     if (!channelId) return
     watchParamHandled.current = true
-    openFromId(channelId)
+    // Before opening locally, ask any other dashboard tab if it wants to
+    // handle it — that way a Telegram click doesn't keep accumulating new
+    // tabs when the user already has the dashboard open.
+    const channel = new BroadcastChannel('m3u-studio-route')
+    let taken = false
+    const onMessage = (e: MessageEvent) => {
+      if (e.data && e.data.type === 'watch-taken' && e.data.channelId === channelId) {
+        taken = true
+      }
+    }
+    channel.addEventListener('message', onMessage)
+    channel.postMessage({ type: 'watch-request', channelId })
+    // Give other tabs a brief window to respond, then either close this tab
+    // (if someone picked it up) or become the player tab ourselves.
+    window.setTimeout(() => {
+      channel.removeEventListener('message', onMessage)
+      channel.close()
+      if (taken) {
+        // Best-effort self-close. Browsers only allow it for tabs opened by
+        // script, but many (Chrome/Safari) also honour close() for tabs
+        // launched from external apps like Telegram.
+        window.close()
+        // If close was blocked, fall through and open locally so the user
+        // isn't stuck on a blank page.
+        window.setTimeout(() => openFromId(channelId), 400)
+      } else {
+        openFromId(channelId)
+      }
+    }, 350)
+    // Strip ?watch=... from the URL either way so a refresh doesn't loop.
     params.delete('watch')
     const qs = params.toString()
     const clean = window.location.pathname + (qs ? `?${qs}` : '') + window.location.hash
     window.history.replaceState(null, '', clean)
   }, [mainChannels, flatSource, openFromId])
+
+  // Listener in the existing/long-lived dashboard tab: when another tab
+  // announces a ?watch= deep-link, open the player here and claim it.
+  useEffect(() => {
+    const channel = new BroadcastChannel('m3u-studio-route')
+    const onMessage = (e: MessageEvent) => {
+      if (!e.data || e.data.type !== 'watch-request') return
+      const channelId: string = e.data.channelId
+      if (!channelId) return
+      openFromId(channelId)
+      try {
+        window.focus()
+      } catch {
+        /* silently ignored by most browsers */
+      }
+      channel.postMessage({ type: 'watch-taken', channelId })
+    }
+    channel.addEventListener('message', onMessage)
+    return () => {
+      channel.removeEventListener('message', onMessage)
+      channel.close()
+    }
+  }, [openFromId])
   const handleRecordFromDigest = useCallback(
     async (entry: DigestEntry, theme: DigestTheme) => {
       try {
@@ -596,6 +648,7 @@ function App() {
             enabled={aiEnabled !== false}
             onPlan={handlePlanFromDigest}
             onRecord={handleRecordFromDigest}
+            onWatch={(entry) => openFromId(entry.channel_id)}
           />
         </div>
       ) : section === 'plans' ? (
