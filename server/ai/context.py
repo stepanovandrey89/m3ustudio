@@ -8,11 +8,58 @@ block — so that even a long favorites list stays under the token budget.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from server.epg import EpgGuide
 from server.playlist import Channel
+
+
+def _normalize_for_match(text: str) -> str:
+    """Lowercase + strip decorative bits we don't want to factor into matches.
+
+    Keeps Cyrillic/Latin letters and digits, drops "HD/4K/UHD/+", punctuation,
+    and collapses whitespace. Lets "Матч ТВ" match "Матч ТВ HD" and vice
+    versa, without having the "HD" suffix eat the useful part of a query.
+    """
+    lowered = text.lower()
+    lowered = re.sub(r"\b(hd|fhd|uhd|4k|hdr|sd)\b", " ", lowered)
+    lowered = re.sub(r"[^\w\s+]", " ", lowered, flags=re.UNICODE)
+    return re.sub(r"\s+", " ", lowered).strip()
+
+
+def channels_mentioned(text: str, channels: list[Channel]) -> list[Channel]:
+    """Return the subset of ``channels`` whose name appears in ``text``.
+
+    Used to shrink the EPG context when the user's question explicitly names
+    a channel ("last programme on Матч ТВ?") — no reason to send 149
+    favourites worth of EPG if only one is relevant. Matches greedily on
+    normalised names (HD-style suffixes stripped) and prefers longer names
+    so "Матч! Футбол 1" wins over bare "Матч" when both fit.
+    """
+    if not text or not channels:
+        return []
+    haystack = f" {_normalize_for_match(text)} "
+    hits: list[tuple[int, Channel]] = []
+    for ch in channels:
+        norm = _normalize_for_match(ch.name)
+        if len(norm) < 3:
+            continue
+        if f" {norm} " in haystack:
+            hits.append((len(norm), ch))
+    if not hits:
+        return []
+    # Longest name first, dedupe by channel id preserving that order.
+    hits.sort(key=lambda item: item[0], reverse=True)
+    seen: set[str] = set()
+    picked: list[Channel] = []
+    for _, ch in hits:
+        if ch.id in seen:
+            continue
+        seen.add(ch.id)
+        picked.append(ch)
+    return picked
 
 
 @dataclass(frozen=True, slots=True)

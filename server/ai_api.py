@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from server.ai.client import AIConfig, get_client
-from server.ai.context import build_main_schedule
+from server.ai.context import build_main_schedule, channels_mentioned
 from server.ai.digest import ALL_THEMES, DigestCache, Theme
 from server.ai.generate import ToolExecutor, generate_digest, stream_chat
 from server.ai.poster import PosterResolver
@@ -148,9 +148,17 @@ def build_router(state: Any) -> APIRouter:  # noqa: ANN401 — state is the main
         # widens to 7 days for queries like "what's on Champions League next
         # Tuesday" where the everyday window can't reach.
         future_hours = 168 if body.deep_search else 12
+        # If the user named a channel in their latest message, restrict the
+        # EPG context to just those channels — no reason to send 149
+        # favourites of programme data when the question is about one.
+        last_user_msg = next(
+            (m.content for m in reversed(body.messages) if m.role == "user"),
+            "",
+        )
+        scoped_channels = channels_mentioned(last_user_msg, main_channels) or main_channels
         schedules = build_main_schedule(
             state.epg,
-            main_channels,
+            scoped_channels,
             past_hours=0,
             future_hours=future_hours,
             only_upcoming=True,
