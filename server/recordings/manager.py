@@ -57,6 +57,9 @@ class RecordingEntry:
     # Individual MKV segments written so far. Empty ⇒ legacy entry (single
     # file == `file`). The player streams them sequentially; we don't merge.
     parts: list[str] = field(default_factory=list)
+    # Summed playable duration across all parts (seconds). 0 means "not yet
+    # measured" (e.g. still recording); UI falls back to the <video> metadata.
+    duration_seconds: float = 0.0
     created_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 
     def to_dict(self) -> dict[str, object]:
@@ -80,6 +83,12 @@ class RecordingManager:
         self._root = root
         self._root.mkdir(parents=True, exist_ok=True)
         self._ffmpeg = ffmpeg_bin
+        # Derive ffprobe alongside the configured ffmpeg binary so a custom
+        # ffmpeg path (e.g. /opt/homebrew/bin/ffmpeg) still finds its sibling.
+        ffmpeg_path = Path(ffmpeg_bin)
+        self._ffprobe = (
+            str(ffmpeg_path.with_name("ffprobe")) if ffmpeg_path.parent != Path("") else "ffprobe"
+        )
         self._tasks: dict[str, asyncio.Task[None]] = {}
         # rec_ids the caller has asked to pause; _run checks this set before
         # flipping status on CancelledError so a pause doesn't overwrite with
@@ -133,6 +142,43 @@ class RecordingManager:
             fp = self._file_path(p)
             if fp.exists():
                 total += fp.stat().st_size
+        return total
+
+    async def _probe_duration(self, path: Path) -> float:
+        """Return MKV playable duration in seconds; 0.0 if unknown."""
+        if not path.exists():
+            return 0.0
+        cmd = [
+            self._ffprobe,
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            str(path),
+        ]
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+            )
+            out, _ = await process.communicate()
+        except (OSError, FileNotFoundError):
+            return 0.0
+        if process.returncode != 0:
+            return 0.0
+        try:
+            return float(out.decode().strip())
+        except ValueError:
+            return 0.0
+
+    async def _total_duration(self, entry: RecordingEntry) -> float:
+        total = 0.0
+        for p in self._parts_of(entry):
+            total += await self._probe_duration(self._file_path(p))
         return total
 
     def list(self) -> list[RecordingEntry]:
@@ -230,7 +276,8 @@ class RecordingManager:
         # Re-read to pick up any size updates, then flip to paused.
         entry = self._load(rec_id) or entry
         size = self._total_size(entry)
-        self._save(replace(entry, status="paused", bytes=size, error=""))
+        duration = await self._total_duration(entry)
+        self._save(replace(entry, status="paused", bytes=size, duration_seconds=duration, error=""))
         return True
 
     async def resume(self, rec_id: str) -> bool:
@@ -401,7 +448,18 @@ class RecordingManager:
             self._save(replace(entry, status="failed", error="no segments produced"))
             return
         size = sum(self._file_path(p).stat().st_size for p in parts)
-        self._save(replace(entry, status="done", file=parts[0], parts=parts, bytes=size, error=""))
+        duration = await self._total_duration(replace(entry, parts=parts))
+        self._save(
+            replace(
+                entry,
+                status="done",
+                file=parts[0],
+                parts=parts,
+                bytes=size,
+                duration_seconds=duration,
+                error="",
+            )
+        )
 
     # ------------------------------------------------------------------
     # Lifecycle helpers

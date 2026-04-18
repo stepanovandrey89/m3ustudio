@@ -148,11 +148,16 @@ class PlanStore:
     def mark_notified_live(self, plan_id: str, message_id: int | None = None) -> None:
         p = self._plans.get(plan_id)
         if p:
+            # The live alert supersedes the original "Запланировано" card —
+            # the scheduler deletes that message in the chat, so we also
+            # clear the stored id to avoid redundant delete attempts on plan
+            # removal.
             self._plans[plan_id] = replace(
                 p,
                 notified_live=True,
                 status="live_notified",
                 tg_live_msg_id=message_id,
+                tg_created_msg_id=None,
             )
             self._save()
 

@@ -111,6 +111,7 @@ export interface Recording {
   upstream_url?: string
   poster_url?: string
   parts?: string[]
+  duration_seconds?: number
   created_at: string
 }
 

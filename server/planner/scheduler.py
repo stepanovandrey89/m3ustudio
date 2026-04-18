@@ -72,6 +72,13 @@ async def _tick(store: PlanStore) -> None:
 
     for plan in store.due_for_live_alert(now):
         msg_id = await _notify_live(plan, cfg, client)
+        # The old "📌 Запланировано" card is now redundant — the live alert
+        # carries the same info plus the "🔴 Смотреть сейчас" CTA. Drop it
+        # so the chat shows only one active card per plan. Failures are
+        # swallowed (Telegram won't delete messages older than 48 h).
+        if plan.tg_created_msg_id:
+            with contextlib.suppress(Exception):
+                await client.delete_message(plan.tg_created_msg_id)
         store.mark_notified_live(plan.id, message_id=msg_id)
 
     store.mark_missed_stale(now)
