@@ -204,6 +204,7 @@ const translations: Record<Lang, Record<string, string>> = {
     'archive_resume': 'Resume',
     'archive_play': 'Play',
     'archive_download': 'Download',
+    'archive_segment_label': 'Segment',
     'archive_size_gb': 'GB',
     'archive_size_mb': 'MB',
     // Misc
@@ -367,6 +368,7 @@ const translations: Record<Lang, Record<string, string>> = {
     'archive_resume': 'Продолжить',
     'archive_play': 'Смотреть',
     'archive_download': 'Скачать',
+    'archive_segment_label': 'Фрагмент',
     'archive_size_gb': 'ГБ',
     'archive_size_mb': 'МБ',
   },

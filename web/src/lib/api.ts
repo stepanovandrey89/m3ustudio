@@ -137,6 +137,8 @@ export const api = {
       method: 'POST',
     }),
   recordingFileUrl: (id: string) => `/api/recordings/${encodeURIComponent(id)}/file`,
+  recordingPartUrl: (id: string, index: number) =>
+    `/api/recordings/${encodeURIComponent(id)}/part/${index}`,
   // ── Plans ─────────────────────────────────────────────────────────────
   listPlans: () => request<PlansResponse>('/api/plans'),
   plansStatus: () => request<PlansStatusResponse>('/api/plans/status'),

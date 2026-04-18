@@ -13,7 +13,7 @@ import {
   Trophy,
   X,
 } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../lib/api'
 import { useI18n } from '../lib/i18n'
 import { cn } from '../lib/cn'
@@ -368,10 +368,10 @@ function RecordingCard({
                   <button
                     type="button"
                     onClick={onPlay}
-                    title={t('archive_play')}
-                    className="flex h-7 w-7 items-center justify-center rounded-full border border-white/20 bg-black/30 text-white/80 backdrop-blur-sm transition hover:border-white/40 hover:text-white"
+                    className="flex items-center gap-1.5 rounded-full border border-white/20 bg-black/30 px-3 py-1.5 text-[12px] text-white/90 backdrop-blur-sm transition hover:border-white/40 hover:text-white"
                   >
                     <PlayCircle className="h-3.5 w-3.5" />
+                    {t('archive_play')}
                   </button>
                 )}
                 <button
@@ -465,6 +465,25 @@ function PlayerOverlay({
   sizeLabels: { gb: string; mb: string }
   lang: string
 }) {
+  const { t } = useI18n()
+  // A single recording may consist of multiple MKV segments (pause/resume or
+  // restart hops). We play them sequentially: on `ended`, advance to the next
+  // segment; the <video> element is remounted via `key` so the new src loads
+  // cleanly without fighting the previous media stream.
+  const parts = rec.parts && rec.parts.length > 0 ? rec.parts : [rec.file]
+  const [partIdx, setPartIdx] = useState(0)
+  const videoRef = useRef<HTMLVideoElement | null>(null)
+
+  useEffect(() => {
+    setPartIdx(0)
+  }, [rec.id])
+
+  const handleEnded = () => {
+    if (partIdx < parts.length - 1) {
+      setPartIdx((i) => i + 1)
+    }
+  }
+
   return (
     <motion.div
       initial={{ opacity: 0 }}
@@ -500,12 +519,39 @@ function PlayerOverlay({
           </button>
         </div>
         <video
-          key={rec.id}
-          src={api.recordingFileUrl(rec.id)}
+          key={`${rec.id}-${partIdx}`}
+          ref={videoRef}
+          src={api.recordingPartUrl(rec.id, partIdx)}
           controls
           autoPlay
+          onEnded={handleEnded}
           className="aspect-video w-full rounded-2xl bg-black"
         />
+        {parts.length > 1 && (
+          <div className="flex items-center justify-between gap-3 text-[11px] text-white/50">
+            <span>
+              {t('archive_segment_label')} {partIdx + 1} / {parts.length}
+            </span>
+            <div className="flex gap-1.5">
+              {parts.map((_, i) => (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => setPartIdx(i)}
+                  className={cn(
+                    'h-1.5 w-6 rounded-full transition',
+                    i === partIdx
+                      ? 'bg-white/80'
+                      : i < partIdx
+                        ? 'bg-white/30'
+                        : 'bg-white/10 hover:bg-white/25',
+                  )}
+                  aria-label={`Segment ${i + 1}`}
+                />
+              ))}
+            </div>
+          </div>
+        )}
       </motion.div>
     </motion.div>
   )

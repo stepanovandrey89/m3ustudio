@@ -7,8 +7,8 @@ Design:
 * Status: `queued` · `running` · `paused` · `done` · `failed`.
 * A recording can be split across multiple MKV segments (`parts`) when the
   user pauses+resumes or when a server restart lands inside the capture
-  window. On normal completion the segments are concatenated into a single
-  `<slug>.mkv` via ffmpeg's concat demuxer.
+  window. Segments are kept as separate files — the web player streams them
+  in order via an `onEnded` hop, no concat/merge step on the server.
 * A single asyncio task per recording handles scheduling + ffmpeg launch,
   updates the sidecar file as things progress.
 """
@@ -55,7 +55,7 @@ class RecordingEntry:
     # Poster url (TMDB / Wikipedia) attached at schedule time for dashboard.
     poster_url: str = ""
     # Individual MKV segments written so far. Empty ⇒ legacy entry (single
-    # file == `file`). Multi-entry lists are merged on `_finalize`.
+    # file == `file`). The player streams them sequentially; we don't merge.
     parts: list[str] = field(default_factory=list)
     created_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 
@@ -243,8 +243,8 @@ class RecordingManager:
         now = datetime.now(UTC)
         stop_dt = _parse_iso(entry.stop)
         if stop_dt is None or stop_dt <= now:
-            # Nothing left to record — finalise what we have.
-            await self._finalize(rec_id)
+            # Nothing left to record — close out with whatever we have.
+            await self._mark_done(rec_id)
             return False
         duration = max(30, int((stop_dt - now).total_seconds()))
         duration = min(duration, MAX_DURATION_SECONDS)
@@ -371,7 +371,7 @@ class RecordingManager:
         reached_end = stop_dt is not None and (stop_dt - now).total_seconds() <= 5
 
         if process.returncode == 0 and reached_end:
-            await self._finalize(rec_id)
+            await self._mark_done(rec_id)
         elif process.returncode == 0:
             # Segment cap expired but window not over (e.g. 6h safety cap).
             # Treat as a pause-ish state so the user can resume.
@@ -385,11 +385,13 @@ class RecordingManager:
         async with self._lock:
             self._tasks.pop(rec_id, None)
 
-    async def _finalize(self, rec_id: str) -> None:
-        """Merge segments into a single MKV and flip status to `done`.
+    async def _mark_done(self, rec_id: str) -> None:
+        """Flip status to `done` and refresh size from disk.
 
-        Single-segment recordings skip the merge. If concat fails, the entry
-        is still marked `done` but keeps the raw parts so nothing is lost.
+        Segments stay as-is on disk — the web player streams `parts` in order,
+        so we skip an expensive ffmpeg concat pass and don't need extra disk
+        for a merged copy. `file` points at the first segment for backward
+        compatibility with the single-file /file endpoint and download link.
         """
         entry = self._load(rec_id)
         if entry is None:
@@ -398,77 +400,8 @@ class RecordingManager:
         if not parts:
             self._save(replace(entry, status="failed", error="no segments produced"))
             return
-        if len(parts) == 1:
-            size = self._file_path(parts[0]).stat().st_size
-            self._save(
-                replace(entry, status="done", file=parts[0], parts=parts, bytes=size, error="")
-            )
-            return
-
-        merged_name = f"{rec_id}.mkv"
-        if merged_name in parts:
-            # Would collide with an existing segment — use a distinct name.
-            merged_name = f"{rec_id}_merged.mkv"
-        merged_path = self._file_path(merged_name)
-        list_path = self._root / f".{rec_id}.concat.txt"
-        list_path.write_text(
-            "\n".join(f"file '{self._file_path(p).as_posix()}'" for p in parts),
-            encoding="utf-8",
-        )
-        command = [
-            self._ffmpeg,
-            "-nostdin",
-            "-hide_banner",
-            "-loglevel",
-            "warning",
-            "-f",
-            "concat",
-            "-safe",
-            "0",
-            "-i",
-            str(list_path),
-            "-c",
-            "copy",
-            "-y",
-            str(merged_path),
-        ]
-        process = await asyncio.create_subprocess_exec(
-            *command,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-        )
-        _, err = await process.communicate()
-        with contextlib.suppress(OSError):
-            list_path.unlink()
-
-        if process.returncode == 0 and merged_path.exists():
-            for p in parts:
-                if p != merged_name:
-                    with contextlib.suppress(OSError):
-                        self._file_path(p).unlink()
-            size = merged_path.stat().st_size
-            self._save(
-                replace(
-                    entry,
-                    status="done",
-                    file=merged_name,
-                    parts=[merged_name],
-                    bytes=size,
-                    error="",
-                )
-            )
-        else:
-            err_msg = err.decode("utf-8", "ignore").strip()[:500]
-            total = self._total_size(entry)
-            self._save(
-                replace(
-                    entry,
-                    status="done",
-                    bytes=total,
-                    error=f"merge failed: {err_msg}" if err_msg else "merge failed",
-                )
-            )
+        size = sum(self._file_path(p).stat().st_size for p in parts)
+        self._save(replace(entry, status="done", file=parts[0], parts=parts, bytes=size, error=""))
 
     # ------------------------------------------------------------------
     # Lifecycle helpers
@@ -496,7 +429,7 @@ class RecordingManager:
             if stop_dt is None or start_dt is None or stop_dt <= now:
                 # Window elapsed — salvage whatever was already captured.
                 if self._parts_of(entry) and self._total_size(entry) > 0:
-                    await self._finalize(entry.id)
+                    await self._mark_done(entry.id)
                 else:
                     self._save(replace(entry, status="failed", error="window elapsed"))
                 continue

@@ -233,6 +233,20 @@ def build_router(state: Any) -> APIRouter:  # noqa: ANN401 — state is the main
             filename=f"{entry.title or entry.id}.mkv",
         )
 
+    @router.get("/recordings/{rec_id}/part/{index}")
+    def recording_part(rec_id: str, index: int) -> FileResponse:
+        """Serve an individual recording segment for sequential playback."""
+        entry = recordings.get(rec_id)
+        if entry is None:
+            raise HTTPException(404, "Recording not found")
+        parts = entry.parts or ([entry.file] if entry.file else [])
+        if index < 0 or index >= len(parts):
+            raise HTTPException(404, "Part index out of range")
+        path = recordings.root / parts[index]
+        if not path.exists():
+            raise HTTPException(404, "File not on disk")
+        return FileResponse(path, media_type="video/x-matroska")
+
     # ------------- Plans (watch-later) -----------------------------------
 
     @router.get("/plans")
