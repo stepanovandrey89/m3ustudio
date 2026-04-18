@@ -310,11 +310,15 @@ class RecordingManager:
         return True
 
     async def cancel(self, rec_id: str) -> bool:
-        """Abort a recording permanently.
+        """Stop a recording.
 
-        Kills the ffmpeg task if alive and flips metadata to `failed` so the UI
-        reflects the change immediately even when the asyncio task has already
-        exited (e.g. after a server restart left a stale entry).
+        * `queued` / `running` with nothing on disk yet → flip to `failed`
+          with error="cancelled".
+        * `paused` (or `running` with real content captured) → treat as
+          "finish early": run `_mark_done` so the captured parts merge into a
+          single MKV and the recording lands in the archive as saved content.
+          This matches user expectation — pausing then cancelling should not
+          throw away data the user already chose to keep.
         """
         async with self._lock:
             task = self._tasks.pop(rec_id, None)
@@ -325,9 +329,15 @@ class RecordingManager:
         entry = self._load(rec_id)
         if entry is None:
             return False
-        if entry.status in ("queued", "running", "paused"):
-            entry = replace(entry, status="failed", error="cancelled")
-            self._save(entry)
+        if entry.status not in ("queued", "running", "paused"):
+            return True
+        # Refresh — pause/running may have written new bytes since we loaded.
+        entry = self._load(rec_id) or entry
+        has_content = self._parts_of(entry) and self._total_size(entry) > 0
+        if has_content:
+            await self._mark_done(rec_id)
+        else:
+            self._save(replace(entry, status="failed", error="cancelled"))
         return True
 
     async def delete(self, rec_id: str) -> bool:
