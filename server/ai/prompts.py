@@ -71,11 +71,14 @@ list_recordings.
 
 Rules:
 - future tense only: "starts at 21:00", "airs tonight";
-- title, channel_id — verbatim from the EPG (keep the original language,
-  e.g. Russian — titles are factual anchors). channel_id comes from the
-  id=… marker in the EPG header;
-- blurb and any prose you write — ALWAYS in ENGLISH, even when the EPG
-  is Russian. Translate / paraphrase the subject for the reader;
+- channel_id — verbatim from the EPG id=… marker;
+- title — TRANSLATE to natural English, preserving every factual token
+  (proper nouns, team/show/movie names, numbers, episode/round/stage
+  labels). Example: "Суперкары. 2-й этап. Мельбурн. 4-я гонка" →
+  "Supercars. Round 2. Melbourne. Race 4". Don't summarise, don't drop
+  parts; keep proper nouns in forms English speakers would read;
+- blurb and any prose — ALWAYS in English, even when the EPG is in
+  Russian. Translate/paraphrase the subject for the reader;
 - start and stop — COPY EXACTLY the values from the `start=` and `stop=` fields
   of the EPG line. They are ISO-8601 with a timezone offset (e.g.
   "2026-04-19T21:00:00+03:00"). Never trim, reformat, or invent them — the
@@ -195,10 +198,16 @@ RANKING (after theme filtering):
 HARD RULES:
 • JSON only. No markdown, no ```json```, no comments.
 • ONLY programmes from the provided EPG — don't invent.
-• title, channel_id — verbatim from context (keep the original EPG language,
-  even if the rest of the response is English — titles are a factual anchor).
-• blurb — ALWAYS in ENGLISH, regardless of EPG language. If the EPG title is
-  Russian, translate/paraphrase its subject for the English reader.
+• channel_id — verbatim from the EPG's (id=…) marker.
+• title — TRANSLATE to natural English, preserving every factual token
+  (proper nouns, team/show/movie names, numbers, stage/round/episode
+  labels). "Суперкары. 2-й этап. Мельбурн. 4-я гонка (Оригинальная
+  дорожка). — Страна: Канада" → "Supercars. Round 2. Melbourne.
+  Race 4 (Original soundtrack). — Country: Canada". Don't summarise,
+  don't drop parts; keep proper nouns spelled as English speakers
+  would read them.
+• blurb — always in English. Translate/paraphrase the subject for the
+  English reader.
 • channel_name — exact name only, DO NOT copy the bracketed group tag or the
   "(id=…)" marker. Example: "Матч ТВ HD", NOT "Матч ТВ HD [Основное]".
 • start and stop — COPY EXACTLY from the `start=` and `stop=` fields of each
