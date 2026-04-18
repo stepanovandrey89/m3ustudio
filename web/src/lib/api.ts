@@ -3,7 +3,21 @@
  * All calls go through Vite's /api proxy to the local FastAPI app.
  */
 
-import type { DuplicatesResponse, EpgResponse, MainOperation, MainResponse, SourceOperation, SourceResponse } from '../types'
+import type {
+  DigestResponse,
+  DigestTheme,
+  DuplicatesResponse,
+  EpgResponse,
+  MainOperation,
+  MainResponse,
+  Plan,
+  PlansResponse,
+  PlansStatusResponse,
+  Recording,
+  RecordingsResponse,
+  SourceOperation,
+  SourceResponse,
+} from '../types'
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const resp = await fetch(path, {
@@ -88,6 +102,60 @@ export const api = {
     request<{ ok: boolean }>(`/api/logos/skip/${encodeURIComponent(channelId)}`, { method: 'POST' }),
   overrideLogo: (channelId: string, url: string) =>
     request<{ ok: boolean }>(`/api/logos/override/${encodeURIComponent(channelId)}?url=${encodeURIComponent(url)}`, { method: 'POST' }),
+  // ── AI + recordings ─────────────────────────────────────────────────
+  aiStatus: () => request<{ enabled: boolean; model: string }>('/api/ai/status'),
+  getDigest: (theme: DigestTheme, lang: string, refresh = false) =>
+    request<DigestResponse>(
+      `/api/ai/digest?theme=${theme}&lang=${lang}${refresh ? '&refresh=true' : ''}`,
+    ),
+  refreshDigests: () =>
+    request<{ ok: boolean; deleted: number }>('/api/ai/digest', { method: 'DELETE' }),
+  listRecordings: () => request<RecordingsResponse>('/api/recordings'),
+  startRecording: (body: {
+    channel_id: string
+    title: string
+    start: string
+    stop: string
+    theme?: DigestTheme
+  }) =>
+    request<{ ok: boolean; recording: Recording }>('/api/recordings', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  deleteRecording: (id: string) =>
+    request<{ ok: boolean }>(`/api/recordings/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  cancelRecording: (id: string) =>
+    request<{ ok: boolean }>(`/api/recordings/${encodeURIComponent(id)}/cancel`, {
+      method: 'POST',
+    }),
+  recordingFileUrl: (id: string) => `/api/recordings/${encodeURIComponent(id)}/file`,
+  // ── Plans ─────────────────────────────────────────────────────────────
+  listPlans: () => request<PlansResponse>('/api/plans'),
+  plansStatus: () => request<PlansStatusResponse>('/api/plans/status'),
+  createPlan: (body: {
+    channel_id: string
+    title: string
+    start: string
+    stop: string
+    theme?: DigestTheme | string
+    blurb?: string
+    poster_keywords?: string
+    lang?: string
+  }) =>
+    request<{ ok: boolean; plan: Plan; telegram: unknown }>('/api/plans', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  cancelPlan: (id: string) =>
+    request<{ ok: boolean }>(`/api/plans/${encodeURIComponent(id)}/cancel`, {
+      method: 'POST',
+    }),
+  deletePlan: (id: string) =>
+    request<{ ok: boolean }>(`/api/plans/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
+  testTelegram: () =>
+    request<{ ok: boolean }>('/api/plans/test', { method: 'POST' }),
 }
 
 export interface LogoRegistryItem {

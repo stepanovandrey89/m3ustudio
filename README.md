@@ -18,6 +18,11 @@ A self-hosted playlist editor with drag-and-drop reordering, live HLS preview,
 integrated EPG, automatic logo resolution, duplicate detection, and one-click
 export to a cleaned-up `.m3u8` file.
 
+Now with an **AI concierge** that plans your viewing, a **daily digest** of
+on-theme picks with real movie posters, a **watch-later dashboard** that
+pings a **Telegram bot** when your programme is about to start, and a local
+**MKV archive** for your recordings.
+
 Built as a small, fast, local-first tool: one `docker compose up` (or
 `./run.sh`) and you have a FastAPI backend + React 19 frontend running on
 your machine.
@@ -56,7 +61,46 @@ your machine.
 - Duplicate detection that groups near-identical channel names across providers
 - Import / export: upload a new `.m3u8`, download the curated one, export just the channel names as `.txt`
 
+**AI concierge** *(optional — needs an OpenAI key)*
+- Streaming chat powered by `gpt-5-mini` that knows your favourite channels'
+  EPG for the next 12 hours
+- Recommendations come as rich poster cards (not plain text) via the
+  `recommend_programme` tool call — every pick renders with channel logo,
+  time, live countdown, and action buttons
+- One-click actions per card: **Plan to watch** (adds to dashboard + Telegram)
+  and **Record** (spawns background ffmpeg → archive)
+- Strict future-tense only: the EPG context window filters out anything
+  airing now or in the past, and the prompt forbids past-tense phrasing
+
+**Daily Digest**
+- Bento-grid of curated picks for the day across three themes: **Sport**,
+  **Cinema**, **Assistant**
+- Each card shows a real poster pulled from **TMDB** (optional API key) or
+  Wikipedia fallback, with blurred-logo backdrop when nothing matches
+- Cached per day — generation runs only when you hit Refresh
+- Live countdown stays in sync with the clock (tick every 30 s)
+
+**Plans (watch-later)**
+- Dashboard of scheduled broadcasts sorted by start time
+- Status chips: Scheduled · Live now · Done · Cancelled · Missed
+- **Telegram bot integration** — on "Plan to watch" the bot posts a compact
+  poster card to your chat; one minute before the show starts it posts a
+  second alert with a "🔴 Watch now" deep-link straight back into the
+  player (auto-play with `?watch=<channel_id>`)
+- Deleting a plan in the UI also deletes the Telegram cards (within 48 h,
+  per Telegram API limits)
+- All plans persist to `plans.json` — survive restarts
+
+**Archive (recordings)**
+- Thematic grid of your MKV recordings (Sport / Cinema / Assistant) with
+  poster backdrops
+- Inline `<video>` playback for finished recordings
+- Download, cancel in-progress, or delete; status reflects in real time
+- Recordings started from the AI assistant land under the **Assistant**
+  bucket automatically
+
 **UI**
+- Top-level section navigation: **Playlist · Assistant · Today · Plans · Archive**
 - Dark and light themes, toggleable from the header
 - Responsive: desktop two-panel layout with `@dnd-kit`, mobile tab bar
 - Glass morphism on dark, opaque cream-white panels on light
@@ -198,12 +242,32 @@ First hit wins, result is cached to `logos_cache/` and served via
 | GET    | `/api/proxy?u=<upstream>`             | CORS-safe HLS proxy                   |
 | POST   | `/api/transcode/{channel_id}/start`   | Start ffmpeg AC-3 → AAC               |
 | DELETE | `/api/transcode/{channel_id}`         | Stop transcode                        |
+| GET    | `/api/ai/status`                      | OpenAI client enabled + model name    |
+| POST   | `/api/ai/chat`                        | Streaming assistant chat (SSE)        |
+| GET    | `/api/ai/digest?theme=…&lang=…`       | 10-pick daily digest (cached)         |
+| DELETE | `/api/ai/digest`                      | Wipe all cached digests               |
+| GET    | `/api/ai/poster?keywords=…`           | Resolve poster (TMDB → Wikipedia)     |
+| GET    | `/api/plans`                          | List scheduled plans                  |
+| POST   | `/api/plans`                          | Create plan + Telegram alert          |
+| POST   | `/api/plans/{id}/cancel`              | Mark plan cancelled                   |
+| DELETE | `/api/plans/{id}`                     | Delete plan + Telegram cards          |
+| GET    | `/api/plans/status`                   | Telegram config health                |
+| POST   | `/api/plans/test`                     | Send a test message to the bot chat   |
+| GET    | `/api/recordings`                     | List MKV recordings                   |
+| POST   | `/api/recordings`                     | Queue a recording                     |
+| POST   | `/api/recordings/{id}/cancel`         | Cancel in-progress recording          |
+| DELETE | `/api/recordings/{id}`                | Delete recording + file               |
+| GET    | `/api/recordings/{id}/file`           | Download / stream MKV                 |
 
 ---
 
 ## Configuration
 
-Environment variables (all optional — safe defaults are used if unset):
+Environment variables. Core ones are optional — safe defaults apply if unset.
+The AI / Telegram block is optional — the app runs fine without any of them,
+just with the corresponding features dimmed in the UI.
+
+**Core**
 
 | Variable               | Default                     | Purpose                              |
 |------------------------|-----------------------------|--------------------------------------|
@@ -215,6 +279,31 @@ Environment variables (all optional — safe defaults are used if unset):
 | `M3U_EPG_URL`          | `http://epg.it999.ru/edem.xml.gz` | XMLTV guide URL                |
 | `M3U_TRANSCODE_DIR`    | `./transcode_tmp`           | Temp dir for ffmpeg HLS output       |
 | `M3U_FFMPEG_BIN`       | `ffmpeg`                    | ffmpeg binary path                   |
+| `M3U_AI_CACHE`         | `./ai_cache`                | Digest + poster cache                |
+| `M3U_RECORDINGS`       | `./recordings`              | MKV recordings directory             |
+| `M3U_PLANS`            | `./plans.json`              | Scheduled plans file                 |
+
+**AI Assistant + Daily Digest** *(optional)*
+
+| Variable           | Purpose                                                     |
+|--------------------|-------------------------------------------------------------|
+| `OPENAI_API_KEY`   | Enables the assistant and digest. Get one at [platform.openai.com/api-keys](https://platform.openai.com/api-keys) |
+| `OPENAI_MODEL`     | Defaults to `gpt-5-mini`. `gpt-5-nano` is cheaper if you're price-sensitive |
+| `TMDB_API_KEY`     | Optional, for proper movie/series posters. Free key from [themoviedb.org/settings/api](https://www.themoviedb.org/settings/api) (use the short "API Key v3") |
+
+**Telegram bot** *(optional, powers Plans notifications)*
+
+| Variable             | Purpose                                                    |
+|----------------------|------------------------------------------------------------|
+| `TELEGRAM_BOT_TOKEN` | Bot token from `@BotFather`                                |
+| `TELEGRAM_CHAT_ID`   | Chat or channel id the bot posts to                        |
+| `PUBLIC_BASE_URL`    | Base URL Telegram clients use for "Watch now" deep-links (e.g. `https://your-domain` or `http://<LAN-ip>:8000`) |
+
+Upload `bot_logo.png` from the repo root as the bot's avatar via
+`@BotFather` → `/setuserpic`.
+
+A template is provided in [`.env.example`](./.env.example) — copy to `.env`
+and fill in what you want enabled.
 
 ---
 
@@ -224,6 +313,11 @@ Environment variables (all optional — safe defaults are used if unset):
 .
 ├── server/                     FastAPI backend
 │   ├── main.py                 routes + wiring
+│   ├── ai_api.py               /api/ai/*, /api/plans/*, /api/recordings/*
+│   ├── ai/                     OpenAI client, EPG context, prompts, digest, poster resolver
+│   ├── planner/                PlanStore + background Telegram scheduler
+│   ├── notify/                 Telegram Bot API client
+│   ├── recordings/             ffmpeg recording manager (MKV output)
 │   ├── playlist/               m3u parser + serializer
 │   ├── state/                  persisted Main state + defaults
 │   ├── logos/                  logo resolvers (iptv-org, tv-logos, EPG icons)
@@ -232,12 +326,15 @@ Environment variables (all optional — safe defaults are used if unset):
 │   └── transcode.py            ffmpeg AC-3 → AAC manager
 ├── web/
 │   └── src/
-│       ├── App.tsx             DnD context + layout
-│       ├── components/         SourcePanel, MainPanel, PlayerModal, EpgPanel, …
-│       ├── hooks/              usePlaylist, useTheme, useIsMobile
-│       ├── lib/                api client, cn, archive helpers
+│       ├── App.tsx             DnD context + layout + section routing
+│       ├── components/         SourcePanel, MainPanel, PlayerModal, EpgPanel,
+│       │                       AIAssistant, DailyDigest, PlansPanel, ArchivePanel, SectionNav, …
+│       ├── hooks/              usePlaylist, useTheme, useIsMobile, usePoster, useNow
+│       ├── lib/                api client, cn, archive helpers, SSE reader
 │       └── index.css           dark/light theme tokens + utility overrides
 ├── default_names.txt           bootstrap channel order (mutable)
+├── bot_logo.png                Telegram bot avatar (512×512)
+├── .env.example                env template (OpenAI / TMDB / Telegram)
 ├── run.sh                      one-shot dev launcher
 └── pyproject.toml              backend deps
 ```
@@ -246,8 +343,9 @@ Environment variables (all optional — safe defaults are used if unset):
 
 ## Stack
 
-- **Backend** — FastAPI, Uvicorn, httpx, Pydantic v2, python-multipart
+- **Backend** — FastAPI, Uvicorn, httpx, Pydantic v2, python-multipart, OpenAI SDK, python-dotenv, Pillow
 - **Frontend** — React 19, TypeScript 5, Vite, Tailwind v4, `@dnd-kit/core` + `/sortable`, Framer Motion, `hls.js`, `@tanstack/react-query`, Lucide icons
+- **External APIs** *(optional)* — OpenAI (`gpt-5-mini`), TMDB v3, Wikipedia REST, Telegram Bot API
 - **Tooling** — Ruff, pytest, ESLint, pnpm
 
 ---

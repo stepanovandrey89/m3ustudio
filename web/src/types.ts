@@ -62,3 +62,90 @@ export interface EpgResponse {
   current_index: number | null
   programmes: Programme[]
 }
+
+// ─── AI assistant ──────────────────────────────────────────────────────
+
+export type DigestTheme = 'sport' | 'cinema' | 'assistant'
+
+export interface DigestEntry {
+  channel_id: string
+  channel_name: string
+  title: string
+  start: string
+  stop: string
+  blurb: string
+  poster_keywords: string
+}
+
+export interface DigestResponse {
+  cached: boolean
+  date: string
+  theme: DigestTheme
+  lang: string
+  /** ISO-8601 timestamp of generation (UTC). Empty for pre-v2 caches. */
+  generated_at?: string
+  items: DigestEntry[]
+}
+
+export interface ChatMessage {
+  role: 'user' | 'assistant' | 'system'
+  content: string
+}
+
+// ─── Recordings ────────────────────────────────────────────────────────
+
+export type RecordingStatus = 'queued' | 'running' | 'done' | 'failed'
+
+export interface Recording {
+  id: string
+  channel_id: string
+  channel_name: string
+  title: string
+  theme: DigestTheme | string
+  start: string
+  stop: string
+  status: RecordingStatus
+  file: string
+  bytes: number
+  error: string
+  created_at: string
+}
+
+export interface RecordingsResponse {
+  items: Recording[]
+}
+
+// ─── Plans (watch-later) ───────────────────────────────────────────────
+
+export type PlanStatus =
+  | 'scheduled'
+  | 'live_notified'
+  | 'done'
+  | 'cancelled'
+  | 'missed'
+
+export interface Plan {
+  id: string
+  channel_id: string
+  channel_name: string
+  title: string
+  start: string
+  stop: string
+  theme: string
+  blurb: string
+  poster_url: string
+  status: PlanStatus
+  notified_created: boolean
+  notified_live: boolean
+  created_at: string
+}
+
+export interface PlansResponse {
+  items: Plan[]
+}
+
+export interface PlansStatusResponse {
+  telegram_enabled: boolean
+  base_url: string
+  count: number
+}

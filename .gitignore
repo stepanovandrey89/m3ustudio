@@ -3,10 +3,15 @@
 *.m3u8
 
 # ── Caches & runtime data ────────────────────────────────────────────────────
-logos_cache/
-epg_cache/
-transcode_tmp/
-state.json
+# Anchor runtime dirs to repo root so they don't shadow the server/recordings/
+# Python package that lives next to server/ai/, server/planner/, etc.
+/logos_cache/
+/epg_cache/
+/transcode_tmp/
+/ai_cache/
+/recordings/
+/state.json
+/plans.json
 
 # ── Python ───────────────────────────────────────────────────────────────────
 __pycache__/

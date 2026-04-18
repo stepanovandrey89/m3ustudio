@@ -22,12 +22,18 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Res
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from server import ai_api
+from server.ai.digest import DigestCache
+from server.ai.poster import PosterResolver
 from server.epg import EpgGuide
 from server.logos import EpgIconIndex, IptvOrgIndex, LogoRegistry, LogoResolver
 from server.logos.resolver import _rtrs_candidate
+from server.planner import PlanStore
+from server.planner.scheduler import run_scheduler_loop
 from server.playlist import Channel, Playlist, parse_playlist
 from server.playlist.builder import build_playlist, build_with_main_group
 from server.proxy import proxy_stream
+from server.recordings import RecordingManager
 from server.state import StateStore
 from server.state.defaults import DEFAULT_ORDERED_NAMES
 from server.transcode import TranscodeManager, run_cleanup_loop
@@ -45,6 +51,9 @@ EPG_CACHE = Path(os.environ.get("M3U_EPG_CACHE", PROJECT_ROOT / "epg_cache"))
 EPG_URL = os.environ.get("M3U_EPG_URL", "http://epg.it999.ru/edem.xml.gz")
 TRANSCODE_ROOT = Path(os.environ.get("M3U_TRANSCODE_DIR", PROJECT_ROOT / "transcode_tmp"))
 FFMPEG_BIN = os.environ.get("M3U_FFMPEG_BIN", "ffmpeg")
+AI_CACHE = Path(os.environ.get("M3U_AI_CACHE", PROJECT_ROOT / "ai_cache"))
+RECORDINGS_ROOT = Path(os.environ.get("M3U_RECORDINGS", PROJECT_ROOT / "recordings"))
+PLANS_PATH = Path(os.environ.get("M3U_PLANS", PROJECT_ROOT / "plans.json"))
 STATIC_DIST = PROJECT_ROOT / "web" / "dist"
 
 MAIN_GROUP_NAME = "Основное"
@@ -188,6 +197,14 @@ class AppState:
         self.logo_registry: LogoRegistry = LogoRegistry(LOGO_CACHE)
         self.transcode: TranscodeManager = TranscodeManager(TRANSCODE_ROOT, ffmpeg_bin=FFMPEG_BIN)
         self.transcode_cleanup_task: asyncio.Task | None = None
+        self.digest_cache: DigestCache = DigestCache(AI_CACHE)
+        self.posters: PosterResolver = PosterResolver(AI_CACHE)
+        self.recordings: RecordingManager = RecordingManager(
+            RECORDINGS_ROOT,
+            ffmpeg_bin=FFMPEG_BIN,
+        )
+        self.plans: PlanStore = PlanStore(PLANS_PATH)
+        self.plan_scheduler_task: asyncio.Task | None = None
 
     def reload_playlist(self) -> None:
         self.playlist = parse_playlist(PLAYLIST_PATH)
@@ -256,6 +273,8 @@ async def _startup() -> None:
     asyncio.create_task(_warm_logo_cache())
     # Background task that kills idle transcode sessions every 30s.
     _state.transcode_cleanup_task = asyncio.create_task(run_cleanup_loop(_state.transcode))
+    # Background scheduler fires Telegram alerts when planned programmes are about to start.
+    _state.plan_scheduler_task = asyncio.create_task(run_scheduler_loop(_state.plans))
 
 
 async def _load_epg_in_background() -> None:
@@ -327,7 +346,10 @@ async def _shutdown() -> None:
     # Kill all ffmpeg children and clean up temp dirs.
     if _state.transcode_cleanup_task is not None:
         _state.transcode_cleanup_task.cancel()
+    if _state.plan_scheduler_task is not None:
+        _state.plan_scheduler_task.cancel()
     await _state.transcode.stop_all()
+    await _state.recordings.stop_all()
 
 
 # ---------- Playlist endpoints ----------
@@ -954,6 +976,11 @@ def transcode_file(channel_id: str, filename: str) -> Response:
         headers = {}
 
     return FileResponse(path, media_type=media_type, headers=headers)
+
+
+# ---------- AI assistant + recordings router ----------
+
+app.include_router(ai_api.build_router(_state))
 
 
 # ---------- Static frontend (production build) ----------

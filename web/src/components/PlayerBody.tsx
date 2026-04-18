@@ -170,13 +170,37 @@ export function PlayerBody({
       }
     }
 
+    // Autoplay helper: pre-set volume so the first tap-to-unmute doesn't
+    // blast at 100 %, then try sound first, fall back to muted if the
+    // browser blocks. When muted-fallback kicks in, volume stays at this
+    // level — first user gesture flips `muted=false` and audio comes in
+    // already at the chosen comfort level.
+    const AUTOPLAY_VOLUME = 0.8
+    const startPlayback = async () => {
+      try {
+        video.volume = AUTOPLAY_VOLUME
+      } catch {
+        /* read-only on some mobile browsers, ignore */
+      }
+      try {
+        await video.play()
+      } catch {
+        try {
+          video.muted = true
+          await video.play()
+        } catch {
+          /* user will have to press play manually */
+        }
+      }
+    }
+
     if (Hls.isSupported()) {
       hls = new Hls({ enableWorker: true, lowLatencyMode: false, backBufferLength: 30 })
       hls.loadSource(sourceUrl)
       hls.attachMedia(video)
       hls.on(Hls.Events.MANIFEST_PARSED, (_evt, data) => {
         setLoading(false)
-        void video.play().catch(() => undefined)
+        void startPlayback()
         const maxH = Math.max(0, ...data.levels.map((l) => l.height || 0))
         if (maxH > 0) {
           const q = heightToQuality(maxH)
@@ -189,7 +213,7 @@ export function PlayerBody({
       })
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
       video.src = sourceUrl
-      const onLoaded = () => { setLoading(false); detectQuality() }
+      const onLoaded = () => { setLoading(false); detectQuality(); void startPlayback() }
       const onErr = () => { setError('Stream failed to play'); setLoading(false) }
       video.addEventListener('loadedmetadata', onLoaded, { once: true })
       video.addEventListener('error', onErr, { once: true })
@@ -216,6 +240,39 @@ export function PlayerBody({
     return () => {
       video.removeEventListener('play', onPlay)
       video.removeEventListener('pause', onPause)
+    }
+  }, [streamUrl])
+
+  // Auto-unmute on first user gesture. When the deep-link from Telegram
+  // loads the page, mobile Safari / Chrome autoplay policies typically let
+  // us start muted only. The moment the user touches or clicks anywhere we
+  // flip `muted=false` — audio kicks in at the 20 % volume we pre-set.
+  useEffect(() => {
+    const video = videoRef.current
+    if (!video) return
+    const unmute = () => {
+      if (!video.muted) return
+      video.muted = false
+      // Some browsers reset volume when toggling muted — re-apply our
+      // 80 % level in case they did.
+      try {
+        if (video.volume < 0.05) video.volume = 0.8
+      } catch {
+        /* ignore */
+      }
+    }
+    // Only explicit discrete gestures — a click or a key press. Mouse
+    // moves and hover events fired during normal playback caused transient
+    // buffer stalls because the toggle happened while the audio pipeline
+    // was still settling. A click is a clean, intentional gesture.
+    const events = ['pointerdown', 'touchstart', 'keydown'] as const
+    for (const e of events) {
+      document.addEventListener(e, unmute, { once: true, passive: true })
+    }
+    return () => {
+      for (const e of events) {
+        document.removeEventListener(e, unmute)
+      }
     }
   }, [streamUrl])
 
@@ -409,6 +466,7 @@ export function PlayerBody({
             ref={videoRef}
             controls
             playsInline
+            autoPlay
             controlsList={isMobile ? undefined : 'nofullscreen'}
             className="h-full w-full"
             onDoubleClick={(e) => { e.stopPropagation(); void toggleFullscreen() }}

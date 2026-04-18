@@ -14,10 +14,15 @@ import {
 } from '@dnd-kit/core'
 import { arrayMove, sortableKeyboardCoordinates } from '@dnd-kit/sortable'
 import { Library, ListMusic } from 'lucide-react'
+import { AIAssistant } from './components/AIAssistant'
+import { ArchivePanel } from './components/ArchivePanel'
+import { DailyDigest } from './components/DailyDigest'
 import { DuplicatesModal } from './components/DuplicatesModal'
 import { Header } from './components/Header'
 import { MainPanel } from './components/MainPanel'
+import { PlansPanel } from './components/PlansPanel'
 import { PlayerModal, type PreviewContext } from './components/PlayerModal'
+import { SectionNav, type Section } from './components/SectionNav'
 import { SourcePanel } from './components/SourcePanel'
 import {
   useDuplicates,
@@ -29,10 +34,11 @@ import {
 } from './hooks/usePlaylist'
 import { useIsMobile } from './hooks/useIsMobile'
 import { useTheme } from './hooks/useTheme'
+import { api } from './lib/api'
 import { cn } from './lib/cn'
 import { useI18n } from './lib/i18n'
 import { cyrFirstCompare } from './lib/sort'
-import type { Channel } from './types'
+import type { Channel, DigestEntry, DigestTheme } from './types'
 
 // ---------------------------------------------------------------------------
 // Decorative background — ambient blobs + crisp ellipses + grid
@@ -68,7 +74,7 @@ function FloatingShape({ className, delay = 0, width = 400, height = 100, rotate
 
 function App() {
   const { theme, toggleTheme } = useTheme()
-  const { t } = useI18n()
+  const { t, lang } = useI18n()
   const [mousePos, setMousePos] = useState({ x: 0, y: 0, visible: false })
   useEffect(() => {
     const onMove = (e: MouseEvent) => setMousePos({ x: e.clientX, y: e.clientY, visible: true })
@@ -88,6 +94,35 @@ function App() {
 
   const duplicates = useDuplicates()
   const [showDuplicates, setShowDuplicates] = useState(false)
+
+  // Top-level section (Playlist / AI / Today / Archive)
+  const [section, setSection] = useState<Section>(() => {
+    try {
+      const raw = localStorage.getItem('m3u_section_v1')
+      if (
+        raw === 'playlist' ||
+        raw === 'ai' ||
+        raw === 'today' ||
+        raw === 'plans' ||
+        raw === 'archive'
+      ) {
+        return raw
+      }
+    } catch { /* */ }
+    return 'playlist'
+  })
+  useEffect(() => {
+    try { localStorage.setItem('m3u_section_v1', section) } catch { /* */ }
+  }, [section])
+
+  const [aiEnabled, setAiEnabled] = useState<boolean | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    api.aiStatus()
+      .then((s) => { if (!cancelled) setAiEnabled(s.enabled) })
+      .catch(() => { if (!cancelled) setAiEnabled(false) })
+    return () => { cancelled = true }
+  }, [])
 
   // Ignored duplicate groups — persisted in localStorage
   const [ignoredDuplicates, setIgnoredDuplicates] = useState<Set<string>>(() => {
@@ -153,6 +188,96 @@ function App() {
   const openFromMain = useCallback(
     (channel: Channel) => setPreview({ channel, list: mainChannels }),
     [mainChannels],
+  )
+  const openFromId = useCallback(
+    (channelId: string) => {
+      const channel =
+        mainChannels.find((c) => c.id === channelId) ??
+        flatSource.find((c) => c.id === channelId)
+      if (channel) setPreview({ channel, list: mainChannels.length ? mainChannels : flatSource })
+    },
+    [mainChannels, flatSource],
+  )
+
+  // Telegram "watch" button deep-link — when URL carries ?watch=<channel_id>,
+  // auto-open the player once the playlist has finished loading. We clear the
+  // param afterwards so a refresh doesn't re-open the modal.
+  const watchParamHandled = useRef(false)
+  useEffect(() => {
+    if (watchParamHandled.current) return
+    if (!mainChannels.length && !flatSource.length) return
+    const params = new URLSearchParams(window.location.search)
+    const channelId = params.get('watch')
+    if (!channelId) return
+    watchParamHandled.current = true
+    openFromId(channelId)
+    params.delete('watch')
+    const qs = params.toString()
+    const clean = window.location.pathname + (qs ? `?${qs}` : '') + window.location.hash
+    window.history.replaceState(null, '', clean)
+  }, [mainChannels, flatSource, openFromId])
+  const handleRecordFromDigest = useCallback(
+    async (entry: DigestEntry, theme: DigestTheme) => {
+      try {
+        await api.startRecording({
+          channel_id: entry.channel_id,
+          title: entry.title,
+          start: entry.start,
+          stop: entry.stop,
+          theme,
+        })
+      } catch (err) {
+        console.error('record failed', err)
+      }
+    },
+    [],
+  )
+  const handleRecordFromAI = useCallback(
+    async (entry: { channel_id: string; title: string; start: string; stop: string }) => {
+      try {
+        await api.startRecording({ ...entry, theme: 'assistant' })
+      } catch (err) {
+        console.error('record failed', err)
+      }
+    },
+    [],
+  )
+  // "Запланировать" — новая кнопка на карточках. Создаёт план + пушит в Telegram.
+  const handlePlanFromDigest = useCallback(
+    async (entry: DigestEntry, theme: DigestTheme) => {
+      try {
+        await api.createPlan({
+          channel_id: entry.channel_id,
+          title: entry.title,
+          start: entry.start,
+          stop: entry.stop,
+          theme,
+          blurb: entry.blurb,
+          poster_keywords: entry.poster_keywords,
+          lang,
+        })
+      } catch (err) {
+        console.error('plan failed', err)
+      }
+    },
+    [lang],
+  )
+  const handlePlanFromAI = useCallback(
+    async (entry: {
+      channel_id: string
+      title: string
+      start: string
+      stop: string
+      poster_keywords?: string
+      blurb?: string
+    }) => {
+      try {
+        await api.createPlan({ ...entry, theme: 'assistant', lang })
+      } catch (err) {
+        console.error('plan failed', err)
+      }
+    },
+    [lang],
   )
   const openFromSource = useCallback(
     (channel: Channel) => setPreview({ channel, list: flatSource }),
@@ -356,8 +481,10 @@ function App() {
         onRefetchData={refetchData}
       />
 
+      <SectionNav active={section} onChange={setSection} />
+
       <div className={cn('flex min-h-0 flex-1 flex-col', !isMobile && 'py-3')}>
-      {error && (
+      {error && section === 'playlist' && (
         <div className={cn(
           'glass rounded-xl border-[var(--color-rose-primary)]/30 px-4 py-3 text-sm text-[var(--color-rose-primary)]',
           isMobile ? 'mx-4 mt-2 mb-2' : 'mx-auto mb-3 w-full max-w-5xl px-4',
@@ -366,6 +493,8 @@ function App() {
         </div>
       )}
 
+      {section === 'playlist' ? (
+      <>
       <DndContext
         sensors={sensors}
         collisionDetection={collisionDetection}
@@ -450,6 +579,33 @@ function App() {
             <ListMusic className="h-5 w-5" />
           </MobileTab>
         </nav>
+      )}
+      </>
+      ) : section === 'ai' ? (
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+          <AIAssistant
+            enabled={aiEnabled !== false}
+            loadingStatus={aiEnabled === null}
+            onPlan={handlePlanFromAI}
+            onRecord={handleRecordFromAI}
+          />
+        </div>
+      ) : section === 'today' ? (
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+          <DailyDigest
+            enabled={aiEnabled !== false}
+            onPlan={handlePlanFromDigest}
+            onRecord={handleRecordFromDigest}
+          />
+        </div>
+      ) : section === 'plans' ? (
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+          <PlansPanel onPlay={openFromId} />
+        </div>
+      ) : (
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+          <ArchivePanel />
+        </div>
       )}
       </div>
 

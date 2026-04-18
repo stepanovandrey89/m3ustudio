@@ -1,0 +1,298 @@
+"""Actual OpenAI calls — digest generation and chat streaming.
+
+Kept away from the FastAPI handlers so the business logic stays testable.
+"""
+
+from __future__ import annotations
+
+import json
+from collections.abc import AsyncIterator
+from datetime import UTC, date, datetime
+from typing import Any
+
+from openai import AsyncOpenAI, OpenAIError
+
+from server.ai.client import AIConfig
+from server.ai.context import ChannelSchedule, schedule_to_text
+from server.ai.digest import Digest, DigestEntry, Theme, digest_from_dict
+from server.ai.prompts import chat_system, digest_system
+from server.ai.tools import chat_tools
+
+
+async def generate_digest(
+    client: AsyncOpenAI,
+    config: AIConfig,
+    schedules: list[ChannelSchedule],
+    theme: Theme,
+    lang: str,
+) -> Digest:
+    """Ask GPT to pick highlights; return a parsed Digest."""
+    epg_text = schedule_to_text(schedules, lang=lang)
+    theme_label = {
+        "sport": "спорт / sport",
+        "cinema": "кино и сериалы / cinema & series",
+        "assistant": "рекомендации ассистента / assistant picks",
+    }[theme]
+
+    now_iso = datetime.now(UTC).isoformat()
+    user_prompt = (
+        (
+            f"Тема: {theme_label}\n"
+            f"Сегодня: {date.today().isoformat()} · СЕЙЧАС (UTC): {now_iso}\n"
+            "Всё, что ниже — предстоящий эфир (старт минимум через 10 мин, "
+            "максимум через 12 часов). Не пиши, что передача «шла» или «прошла».\n\n"
+            f"EPG избранных каналов:\n{epg_text}\n"
+        )
+        if lang == "ru"
+        else (
+            f"Theme: {theme_label}\n"
+            f"Today: {date.today().isoformat()} · NOW (UTC): {now_iso}\n"
+            "Everything below is upcoming (starts in 10 min to 12 h). "
+            "Never say a show was on or aired earlier.\n\n"
+            f"Favorite channels EPG:\n{epg_text}\n"
+        )
+    )
+
+    try:
+        response = await client.chat.completions.create(
+            model=config.model,
+            messages=[
+                {"role": "system", "content": digest_system(lang)},
+                {"role": "user", "content": user_prompt},
+            ],
+            response_format={"type": "json_object"},
+        )
+    except OpenAIError as exc:
+        raise RuntimeError(f"OpenAI call failed: {exc}") from exc
+
+    raw = response.choices[0].message.content or "{}"
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        parsed = {"items": []}
+
+    items = tuple(
+        DigestEntry(
+            channel_id=str(i.get("channel_id", "")),
+            channel_name=str(i.get("channel_name", "")),
+            title=str(i.get("title", "")),
+            start=str(i.get("start", "")),
+            stop=str(i.get("stop", "")),
+            blurb=str(i.get("blurb", "")),
+            poster_keywords=str(i.get("poster_keywords", "")),
+        )
+        for i in parsed.get("items", [])
+        if i.get("title")
+    )
+
+    return Digest(
+        date=date.today().isoformat(),
+        theme=theme,
+        lang=lang,
+        generated_at=datetime.now(UTC).isoformat(),
+        items=items[:10],
+    )
+
+
+async def stream_chat(
+    client: AsyncOpenAI,
+    config: AIConfig,
+    messages: list[dict[str, Any]],
+    schedules: list[ChannelSchedule],
+    lang: str,
+    tool_executor: ToolExecutor,
+) -> AsyncIterator[dict[str, Any]]:
+    """Yield dict events for SSE: {type:'delta'|'tool'|'done'|'error', ...}.
+
+    Supports a single round of function calls. When the model wants to call a
+    tool we execute it, append the result, and continue streaming a second
+    response that incorporates the tool output.
+    """
+    epg_text = schedule_to_text(schedules, lang=lang)
+    now_iso = datetime.now(UTC).isoformat()
+    context_msg = {
+        "role": "system",
+        "content": (
+            (
+                f"СЕЙЧАС (UTC): {now_iso}\n"
+                "EPG НИЖЕ — только передачи, идущие прямо сейчас или стартующие\n"
+                "в ближайшие 12 часов. Всё, что в этом блоке, ЕЩЁ НЕ ЗАКОНЧИЛОСЬ.\n"
+                "Формат строк: `ДеньНед ЧЧ:ММ · длительность · Название — описание`\n"
+                "Для каждой передачи используй channel_id из `(id=...)` в заголовке.\n"
+                "=============== EPG START ===============\n"
+                f"{epg_text}\n"
+                "================ EPG END ================"
+            )
+            if lang == "ru"
+            else (
+                f"NOW (UTC): {now_iso}\n"
+                "EPG BELOW contains only programmes airing right now or starting\n"
+                "within the next 12 hours. Nothing in this block has ended yet.\n"
+                "Line format: `WeekDay HH:MM · duration · Title — description`\n"
+                "For each programme use the channel_id from `(id=...)` in the header.\n"
+                "=============== EPG START ===============\n"
+                f"{epg_text}\n"
+                "================ EPG END ================"
+            )
+        ),
+    }
+
+    full_messages: list[dict[str, Any]] = [
+        {"role": "system", "content": chat_system(lang)},
+        context_msg,
+        *messages,
+    ]
+
+    tools = chat_tools()
+    max_rounds = 4
+
+    try:
+        for _ in range(max_rounds):
+            pending: list[dict[str, Any]] = []
+            errored = False
+            async for event in _one_round(client, config, full_messages, tools):
+                if event["type"] == "tool_call":
+                    # Hold these until the stream completes so we can batch
+                    # execute every tool call from a single assistant turn
+                    # (the model can emit several — e.g. 3 recommendations).
+                    pending.append(event)
+                    yield event
+                else:
+                    yield event
+                    if event["type"] == "error":
+                        errored = True
+            if errored or not pending:
+                return
+
+            # Record the assistant's tool-calling turn once, then feed every
+            # tool result back in order so the next round has full context.
+            full_messages.append(pending[0]["assistant_message"])
+            for call in pending:
+                try:
+                    result = await tool_executor.execute(call["name"], call["arguments"])
+                except Exception as exc:  # noqa: BLE001 — surface to user
+                    result = {"ok": False, "error": str(exc)}
+                yield {
+                    "type": "tool_result",
+                    "call_id": call["call_id"],
+                    "name": call["name"],
+                    "result": result,
+                }
+                full_messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": call["call_id"],
+                        "content": json.dumps(result, ensure_ascii=False),
+                    }
+                )
+    except OpenAIError as exc:
+        yield {"type": "error", "message": str(exc)}
+
+
+async def _one_round(
+    client: AsyncOpenAI,
+    config: AIConfig,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]],
+) -> AsyncIterator[dict[str, Any]]:
+    """Stream a single OpenAI completion, yielding text deltas and tool calls."""
+    stream = await client.chat.completions.create(
+        model=config.model,
+        messages=messages,
+        tools=tools,
+        stream=True,
+    )
+
+    collected_text: list[str] = []
+    # Aggregate streaming tool-call deltas by index.
+    tool_calls: dict[int, dict[str, Any]] = {}
+
+    async for chunk in stream:
+        if not chunk.choices:
+            continue
+        delta = chunk.choices[0].delta
+        if delta.content:
+            collected_text.append(delta.content)
+            yield {"type": "delta", "text": delta.content}
+        if delta.tool_calls:
+            for tc in delta.tool_calls:
+                idx = tc.index or 0
+                bucket = tool_calls.setdefault(
+                    idx,
+                    {"id": "", "name": "", "arguments": ""},
+                )
+                if tc.id:
+                    bucket["id"] = tc.id
+                if tc.function and tc.function.name:
+                    bucket["name"] = tc.function.name
+                if tc.function and tc.function.arguments:
+                    bucket["arguments"] += tc.function.arguments
+
+    # Emit tool calls after stream completes.
+    if tool_calls:
+        assistant_message = {
+            "role": "assistant",
+            "content": "".join(collected_text) or None,
+            "tool_calls": [
+                {
+                    "id": b["id"],
+                    "type": "function",
+                    "function": {"name": b["name"], "arguments": b["arguments"]},
+                }
+                for b in tool_calls.values()
+            ],
+        }
+        for bucket in tool_calls.values():
+            try:
+                args = json.loads(bucket["arguments"]) if bucket["arguments"] else {}
+            except json.JSONDecodeError:
+                args = {}
+            yield {
+                "type": "tool_call",
+                "call_id": bucket["id"],
+                "name": bucket["name"],
+                "arguments": args,
+                "assistant_message": assistant_message,
+            }
+    else:
+        yield {"type": "done"}
+
+
+class ToolExecutor:
+    """Pluggable tool dispatcher — receives name + args, returns JSON-safe dict."""
+
+    def __init__(
+        self,
+        *,
+        on_record: callable[..., Any] | None = None,
+        on_list_recordings: callable[..., Any] | None = None,
+        on_recommend: callable[..., Any] | None = None,
+    ) -> None:
+        self._on_record = on_record
+        self._on_list = on_list_recordings
+        self._on_recommend = on_recommend
+
+    async def execute(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
+        if name == "record_programme" and self._on_record:
+            return await _maybe_await(self._on_record(**args))
+        if name == "list_recordings" and self._on_list:
+            return await _maybe_await(self._on_list())
+        if name == "recommend_programme" and self._on_recommend:
+            return await _maybe_await(self._on_recommend(**args))
+        return {"ok": False, "error": f"Unknown or unbound tool: {name}"}
+
+
+async def _maybe_await(value: Any) -> Any:
+    import inspect
+
+    if inspect.isawaitable(value):
+        return await value
+    return value
+
+
+__all__ = [
+    "ToolExecutor",
+    "digest_from_dict",
+    "generate_digest",
+    "stream_chat",
+]
