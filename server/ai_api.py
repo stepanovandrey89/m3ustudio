@@ -116,7 +116,12 @@ def build_router(state: Any) -> APIRouter:  # noqa: ANN401 — state is the main
             only_upcoming=True,
         )
         result = await generate_digest(client, cfg, schedules, theme_typed, lang)
-        digest_cache.put(result)
+        # Don't persist empty digests — a transient model glitch would otherwise
+        # freeze an "empty" result on disk for the rest of the day, and the
+        # frontend would keep serving it until the user hits refresh or the
+        # date rolls over. Letting the next request regenerate is cheap.
+        if result.items:
+            digest_cache.put(result)
         return JSONResponse({"cached": False, **result.to_dict()})
 
     @router.delete("/ai/digest")
