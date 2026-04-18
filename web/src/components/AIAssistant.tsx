@@ -120,15 +120,12 @@ export function AIAssistant({ enabled, loadingStatus, onPlan, onRecord }: AIAssi
           : { role: 'assistant', content: t.text },
       )
 
-      // Snapshot + reset deep mode BEFORE the request: single-shot scope so
-      // follow-up questions don't silently keep paying the 7-day token cost.
-      const useDeep = deepMode
-      setDeepMode(false)
-
+      // Deep mode stays armed for the whole thread — user turns it off via
+      // the × badge or by clearing the chat.
       try {
         for await (const evt of sseStream<StreamEvent>('/api/ai/chat', {
           signal: controller.signal,
-          body: { messages, lang, deep_search: useDeep },
+          body: { messages, lang, deep_search: deepMode },
         })) {
           setTurns((all) =>
             all.map((t) =>
@@ -202,6 +199,7 @@ export function AIAssistant({ enabled, loadingStatus, onPlan, onRecord }: AIAssi
   const clear = useCallback(() => {
     if (streaming) stop()
     setTurns([])
+    setDeepMode(false)
     try {
       localStorage.removeItem(STORAGE_KEY)
     } catch {
