@@ -177,7 +177,7 @@ export function DailyDigest({ enabled, onPlan, onRecord }: DailyDigestProps) {
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col px-4 pb-8 pt-6 sm:px-6">
+    <div className="mx-auto flex w-full max-w-5xl flex-1 flex-col px-4 pb-8 pt-6 sm:px-6">
       <div className="flex flex-wrap items-end justify-between gap-4 pb-6">
         <div className="min-w-0">
           <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.28em] text-fog-200/50">

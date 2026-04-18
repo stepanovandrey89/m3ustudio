@@ -248,7 +248,7 @@ export function AIAssistant({ enabled, loadingStatus, onPlan, onRecord }: AIAssi
   }
 
   return (
-    <div className="relative mx-auto flex min-h-full w-full max-w-3xl flex-1 flex-col px-4 pb-4 pt-6 sm:px-6">
+    <div className="relative mx-auto flex min-h-full w-full max-w-5xl flex-1 flex-col px-4 pb-4 pt-6 sm:px-6">
       {/* Header strip */}
       <div className="flex items-end justify-between gap-3 pb-4">
         <div>
