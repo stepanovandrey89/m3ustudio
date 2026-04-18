@@ -6,6 +6,7 @@ Kept away from the FastAPI handlers so the business logic stays testable.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import AsyncIterator
 from datetime import UTC, date, datetime
 from typing import Any
@@ -17,6 +18,16 @@ from server.ai.context import ChannelSchedule, schedule_to_text
 from server.ai.digest import Digest, DigestEntry, Theme, digest_from_dict
 from server.ai.prompts import chat_system, digest_system
 from server.ai.tools import chat_tools
+
+_GROUP_SUFFIX_RE = re.compile(r"\s*\[[^\]]+\]\s*$")
+
+
+def _clean_channel_name(name: str) -> str:
+    """Strip trailing "[Group]" markers the model occasionally copies verbatim
+    from the EPG text header into channel_name. We want the raw channel name,
+    not "Матч ТВ HD [Основное]".
+    """
+    return _GROUP_SUFFIX_RE.sub("", name or "").strip()
 
 
 async def generate_digest(
@@ -74,7 +85,7 @@ async def generate_digest(
     items = tuple(
         DigestEntry(
             channel_id=str(i.get("channel_id", "")),
-            channel_name=str(i.get("channel_name", "")),
+            channel_name=_clean_channel_name(str(i.get("channel_name", ""))),
             title=str(i.get("title", "")),
             start=str(i.get("start", "")),
             stop=str(i.get("stop", "")),
