@@ -121,24 +121,26 @@ async def stream_chat(
     deep_hint_ru = (
         "\nПользователь включил глубокий поиск (дата/событие/команда/канал). "
         "Отбирай только то, что реально совпадает с запросом. "
-        "Если спрашивают про рекомендации / «найди / покажи / что идёт» — "
-        "ВСЕГДА вызывай recommend_programme по каждой подходящей передаче "
-        "(как в обычном режиме): карточки с постером и кнопки «Запланировать» / "
-        "«Записать» должны появиться. Текстом отвечай только на чисто "
-        "фактологические вопросы («какая последняя дата EPG», «есть ли что-то "
-        "на канале X»). Если ничего не подходит — одно короткое предложение."
+        "ГЛАВНОЕ ПРАВИЛО: как только ты в ответе называешь конкретную передачу "
+        "(с названием и временем старта) — ОБЯЗАТЕЛЬНО вызывай для неё "
+        "recommend_programme. Цель пользователя — запланировать или записать, "
+        "ему нужны карточки с постером и кнопки «Запланировать» / «Записать», "
+        "а не только текст. Одно коротко вводное предложение + tool-calls. "
+        "Чистый текст допустим только если в EPG ничего не подходит (тогда "
+        "одна честная фраза) или вопрос мета («сколько дней EPG загружено»)."
         if deep
         else ""
     )
     deep_hint_en = (
         "\nThe user turned on deep search (date / event / team / channel). "
         "Include only programmes that actually match the query. "
-        "For recommendation-style questions ('find / show / what's on') you "
-        "MUST still call recommend_programme for every matching programme — "
-        "poster cards with Plan / Record buttons are expected, same as in the "
-        "regular mode. Reply in plain text only for purely factual questions "
-        "('what's the last EPG date', 'does channel X have anything'). "
-        "If nothing matches, answer with one short sentence."
+        "KEY RULE: whenever your answer names a concrete programme (title + "
+        "start time) you MUST emit recommend_programme for it. The user's "
+        "goal is to plan or record — they need poster cards with Plan / "
+        "Record buttons, not just prose. One short intro sentence + tool "
+        "calls. Plain text is acceptable only when nothing in the EPG "
+        "matches (one honest sentence) or the question is meta ('how many "
+        "days of EPG are loaded')."
         if deep
         else ""
     )
