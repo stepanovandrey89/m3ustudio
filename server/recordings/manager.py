@@ -5,10 +5,13 @@ Design:
 * Metadata lives alongside the video as `<slug>.json` so listings survive
   restarts without a database.
 * Status: `queued` · `running` · `paused` · `done` · `failed`.
-* A recording can be split across multiple MKV segments (`parts`) when the
-  user pauses+resumes or when a server restart lands inside the capture
-  window. Segments are kept as separate files — the web player streams them
-  in order via an `onEnded` hop, no concat/merge step on the server.
+* A recording can be split across multiple MKV segments (`parts`) while
+  it's still active (pause/resume or restart hops). On final completion
+  `_mark_done` concatenates the segments into a single MKV via ffmpeg's
+  concat demuxer (`-c copy`, no re-encode) and deletes the parts, so the
+  browser player gets one continuous timeline. While a recording is
+  `paused` the segments stay as separate files and the player plays them
+  sequentially via `onEnded`.
 * A single asyncio task per recording handles scheduling + ffmpeg launch,
   updates the sidecar file as things progress.
 """
@@ -433,12 +436,14 @@ class RecordingManager:
             self._tasks.pop(rec_id, None)
 
     async def _mark_done(self, rec_id: str) -> None:
-        """Flip status to `done` and refresh size from disk.
+        """Flip status to `done` and collapse segments into one MKV.
 
-        Segments stay as-is on disk — the web player streams `parts` in order,
-        so we skip an expensive ffmpeg concat pass and don't need extra disk
-        for a merged copy. `file` points at the first segment for backward
-        compatibility with the single-file /file endpoint and download link.
+        Multi-segment recordings (pause/resume or restart hops) are concatenated
+        via ffmpeg's concat demuxer so the browser player gets a single
+        continuous timeline instead of jumping between files on `onEnded`.
+        Concat runs with `-c copy` (no re-encode) so the cost is close to disk
+        I/O. On failure the entry is still marked `done` with the original
+        parts intact — the sequential player remains a working fallback.
         """
         entry = self._load(rec_id)
         if entry is None:
@@ -447,19 +452,95 @@ class RecordingManager:
         if not parts:
             self._save(replace(entry, status="failed", error="no segments produced"))
             return
-        size = sum(self._file_path(p).stat().st_size for p in parts)
-        duration = await self._total_duration(replace(entry, parts=parts))
-        self._save(
-            replace(
-                entry,
-                status="done",
-                file=parts[0],
-                parts=parts,
-                bytes=size,
-                duration_seconds=duration,
-                error="",
+
+        if len(parts) == 1:
+            size = self._file_path(parts[0]).stat().st_size
+            duration = await self._total_duration(replace(entry, parts=parts))
+            self._save(
+                replace(
+                    entry,
+                    status="done",
+                    file=parts[0],
+                    parts=parts,
+                    bytes=size,
+                    duration_seconds=duration,
+                    error="",
+                )
             )
+            return
+
+        merged_name = f"{rec_id}.mkv"
+        if merged_name in parts:
+            merged_name = f"{rec_id}_merged.mkv"
+        merged_path = self._file_path(merged_name)
+        list_path = self._root / f".{rec_id}.concat.txt"
+        list_path.write_text(
+            "\n".join(f"file '{self._file_path(p).as_posix()}'" for p in parts),
+            encoding="utf-8",
         )
+        command = [
+            self._ffmpeg,
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "warning",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            str(list_path),
+            "-c",
+            "copy",
+            "-y",
+            str(merged_path),
+        ]
+        err: bytes = b""
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *command,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+            )
+            _, err = await process.communicate()
+        finally:
+            with contextlib.suppress(OSError):
+                list_path.unlink()
+
+        if process.returncode == 0 and merged_path.exists():
+            for p in parts:
+                if p != merged_name:
+                    with contextlib.suppress(OSError):
+                        self._file_path(p).unlink()
+            size = merged_path.stat().st_size
+            duration = await self._probe_duration(merged_path)
+            self._save(
+                replace(
+                    entry,
+                    status="done",
+                    file=merged_name,
+                    parts=[merged_name],
+                    bytes=size,
+                    duration_seconds=duration,
+                    error="",
+                )
+            )
+        else:
+            err_msg = err.decode("utf-8", "ignore").strip()[:500]
+            total_size = sum(self._file_path(p).stat().st_size for p in parts)
+            duration = await self._total_duration(replace(entry, parts=parts))
+            self._save(
+                replace(
+                    entry,
+                    status="done",
+                    file=parts[0],
+                    parts=parts,
+                    bytes=total_size,
+                    duration_seconds=duration,
+                    error=f"merge failed: {err_msg}" if err_msg else "merge failed",
+                )
+            )
 
     # ------------------------------------------------------------------
     # Lifecycle helpers
