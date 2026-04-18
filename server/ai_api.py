@@ -411,9 +411,24 @@ async def _tool_recommend(
     poster_keywords: str = "",
     blurb: str = "",
 ) -> dict[str, Any]:
-    """Resolve a poster for a programme the assistant is recommending."""
+    """Resolve a poster for a programme the assistant is recommending.
+
+    Rejects the call if ``channel_id`` isn't in the playlist — the model
+    occasionally hallucinates an id (wrong hex, or invents one wholesale)
+    and a tolerant fallback was rendering broken cards with the raw id
+    instead of a channel name. Returning ``ok:false`` surfaces the mistake
+    so the next tool-calling round can self-correct or skip.
+    """
     channel = state.playlist.by_id(channel_id)
-    channel_name = channel.name if channel else channel_id
+    if channel is None:
+        return {
+            "ok": False,
+            "error": (
+                f"unknown channel_id: {channel_id}. Use only ids from the EPG context marked id=…"
+            ),
+            "channel_id": channel_id,
+            "title": title,
+        }
     keywords = (poster_keywords or title).strip()
     poster_url: str | None = None
     if keywords:
@@ -425,7 +440,7 @@ async def _tool_recommend(
     return {
         "ok": True,
         "channel_id": channel_id,
-        "channel_name": channel_name,
+        "channel_name": channel.name,
         "title": title,
         "start": start,
         "stop": stop,

@@ -631,6 +631,7 @@ interface RecommendCardProps {
 
 function RecommendCard({ tool, lang, onPlan, onRecord }: RecommendCardProps) {
   const res = (tool.result ?? {}) as {
+    ok?: boolean
     channel_id?: string
     channel_name?: string
     title?: string
@@ -652,6 +653,12 @@ function RecommendCard({ tool, lang, onPlan, onRecord }: RecommendCardProps) {
     return (
       <div className="h-24 w-full animate-pulse rounded-2xl border border-white/10 bg-white/[0.03]" />
     )
+  }
+  // Backend rejected the tool call (e.g. hallucinated channel_id) — render
+  // nothing rather than a half-broken card. The model usually retries with a
+  // correct id in the next round.
+  if (tool.result && res.ok === false) {
+    return null
   }
 
   const when = start
