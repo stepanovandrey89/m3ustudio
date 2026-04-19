@@ -92,6 +92,26 @@ export function AIAssistant({ enabled, loadingStatus, onPlan, onRecord }: AIAssi
       /* */
     }
   }, [deepMode])
+
+  // Chat history is language-specific — AI blurbs / titles are generated in
+  // the active locale. Switching RU ↔ EN would leave the prior replies
+  // mismatched with the UI, so wipe the thread (and disarm deep mode) when
+  // lang changes. On first mount this is a no-op because prevLangRef starts
+  // as the current lang.
+  const prevLangRef = useRef(lang)
+  useEffect(() => {
+    if (prevLangRef.current === lang) return
+    prevLangRef.current = lang
+    if (streaming) abortRef.current?.abort()
+    setTurns([])
+    setDeepMode(false)
+    try {
+      localStorage.removeItem(STORAGE_KEY)
+      localStorage.removeItem(DEEP_MODE_KEY)
+    } catch {
+      /* */
+    }
+  }, [lang, streaming])
   const abortRef = useRef<AbortController | null>(null)
   const inputRef = useRef<HTMLTextAreaElement | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)

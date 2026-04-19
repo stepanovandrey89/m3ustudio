@@ -13,7 +13,7 @@ import {
   Trophy,
   Video,
 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../lib/api'
 import { useI18n } from '../lib/i18n'
 import { useNow, formatCountdown } from '../hooks/useNow'
@@ -163,6 +163,22 @@ export function DailyDigest({ enabled, onPlan, onRecord, onWatch }: DailyDigestP
       void fetchDigest(active)
     }
   }, [active, cache, enabled, fetchDigest])
+
+  // Language-specific content: when the user flips RU ↔ EN, drop the
+  // previously-loaded digests (which are in the old locale) and reseed
+  // from the new-lang cache. The per-theme fetchDigest above picks up any
+  // gaps automatically on the next render.
+  const prevLangRef = useRef(lang)
+  useEffect(() => {
+    if (prevLangRef.current === lang) return
+    prevLangRef.current = lang
+    const next: Partial<Record<DigestTheme, DigestResponse>> = {}
+    for (const th of ['sport', 'cinema', 'assistant'] as const) {
+      const hit = loadCachedDigest(th, lang)
+      if (hit) next[th] = hit
+    }
+    setCache(next)
+  }, [lang])
 
   const digest = cache[active]
   const isLoading = Boolean(loading[active])
