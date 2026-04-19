@@ -355,7 +355,10 @@ def build_router(state: Any) -> APIRouter:  # noqa: ANN401 — state is the main
 
         # Resolve poster synchronously so the Telegram card has a hero image.
         poster_url = await _resolve_poster_for_title(
-            posters, body.title, body.poster_keywords, body.lang,
+            posters,
+            body.title,
+            body.poster_keywords,
+            body.lang,
         )
 
         plan = plans.add(
@@ -471,7 +474,10 @@ async def _tool_record(
     if channel is None:
         return {"ok": False, "error": f"unknown channel_id: {channel_id}"}
     poster_url = await _resolve_poster_for_title(
-        state.posters, title, poster_keywords, lang,
+        state.posters,
+        title,
+        poster_keywords,
+        lang,
     )
     try:
         entry = await state.recordings.schedule(
@@ -530,7 +536,10 @@ async def _tool_recommend(
             "title": title,
         }
     resolved = await _resolve_poster_for_title(
-        state.posters, title, poster_keywords, lang,
+        state.posters,
+        title,
+        poster_keywords,
+        lang,
     )
     poster_url: str | None = resolved or None
     return {
