@@ -200,8 +200,9 @@ function App() {
   )
 
   // Telegram "watch" button deep-link — when URL carries ?watch=<channel_id>,
-  // auto-open the player once the playlist has finished loading. We clear the
-  // param afterwards so a refresh doesn't re-open the modal.
+  // auto-open the player once the playlist has finished loading. The new
+  // tab wins: it opens the player locally and asks any older dashboard tabs
+  // to close themselves so we don't accumulate duplicates.
   const watchParamHandled = useRef(false)
   useEffect(() => {
     if (watchParamHandled.current) return
@@ -210,64 +211,42 @@ function App() {
     const channelId = params.get('watch')
     if (!channelId) return
     watchParamHandled.current = true
-    // Before opening locally, ask any other dashboard tab if it wants to
-    // handle it — that way a Telegram click doesn't keep accumulating new
-    // tabs when the user already has the dashboard open.
+    // Announce ourselves as the new active tab for this deep-link and open
+    // the player here. Older tabs listening on the channel will self-close.
     const channel = new BroadcastChannel('m3u-studio-route')
-    let taken = false
-    const onMessage = (e: MessageEvent) => {
-      if (e.data && e.data.type === 'watch-taken' && e.data.channelId === channelId) {
-        taken = true
-      }
-    }
-    channel.addEventListener('message', onMessage)
-    channel.postMessage({ type: 'watch-request', channelId })
-    // Give other tabs a brief window to respond, then either close this tab
-    // (if someone picked it up) or become the player tab ourselves.
-    window.setTimeout(() => {
-      channel.removeEventListener('message', onMessage)
-      channel.close()
-      if (taken) {
-        // Best-effort self-close. Browsers only allow it for tabs opened by
-        // script, but many (Chrome/Safari) also honour close() for tabs
-        // launched from external apps like Telegram.
-        window.close()
-        // If close was blocked, fall through and open locally so the user
-        // isn't stuck on a blank page.
-        window.setTimeout(() => openFromId(channelId), 400)
-      } else {
-        openFromId(channelId)
-      }
-    }, 350)
-    // Strip ?watch=... from the URL either way so a refresh doesn't loop.
+    channel.postMessage({ type: 'watch-claim', channelId })
+    channel.close()
+    openFromId(channelId)
+    // Strip ?watch=... so a refresh doesn't re-fire the announcement.
     params.delete('watch')
     const qs = params.toString()
     const clean = window.location.pathname + (qs ? `?${qs}` : '') + window.location.hash
     window.history.replaceState(null, '', clean)
   }, [mainChannels, flatSource, openFromId])
 
-  // Listener in the existing/long-lived dashboard tab: when another tab
-  // announces a ?watch= deep-link, open the player here and claim it.
+  // Listener in every dashboard tab: when a newer tab claims a ?watch=
+  // deep-link, that tab becomes the active one and this (older) tab tries
+  // to close itself. Browsers only allow close() on tabs opened by script
+  // or from external apps — when it's blocked, the tab just stays put and
+  // the user sees two windows, which is the pre-existing behaviour.
   useEffect(() => {
     const channel = new BroadcastChannel('m3u-studio-route')
     const onMessage = (e: MessageEvent) => {
-      if (!e.data || e.data.type !== 'watch-request') return
-      const channelId: string = e.data.channelId
-      if (!channelId) return
-      openFromId(channelId)
+      if (!e.data || e.data.type !== 'watch-claim') return
+      // The claimant tab just broadcast; anyone else listening is "older"
+      // by definition. Close best-effort.
       try {
-        window.focus()
+        window.close()
       } catch {
-        /* silently ignored by most browsers */
+        /* browser refused — leave the tab open */
       }
-      channel.postMessage({ type: 'watch-taken', channelId })
     }
     channel.addEventListener('message', onMessage)
     return () => {
       channel.removeEventListener('message', onMessage)
       channel.close()
     }
-  }, [openFromId])
+  }, [])
   const handleRecordFromDigest = useCallback(
     async (entry: DigestEntry, theme: DigestTheme) => {
       try {
