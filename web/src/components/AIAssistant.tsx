@@ -529,6 +529,10 @@ function applyEvent(
 // result. Strip those lines so the narration stays clean.
 const TOOL_CALL_LINE_RE =
   /^[ \t]*(?:recommend_programme|record_programme|list_recordings)\s*\(.*$/gm
+// Meta-lines that are entirely wrapped in parens — the model emits things
+// like "(коротко — 3 передачи)" or "(summary below)" between the lead
+// sentence and the card list. They add no value and clutter the bubble.
+const META_PAREN_LINE_RE = /^[ \t]*\([^)\n]*\)[ \t]*$/gm
 
 // Even when tool calls fire correctly, the model often re-dictates the same
 // picks as a numbered list ("1) Смерч — стартует 14:19 (CineMan VHS)") right
@@ -540,6 +544,7 @@ const BULLET_LIST_RE = /\n\s*[-•]\s/
 function sanitizeAssistantText(text: string, hasCards: boolean): string {
   let cleaned = text
     .replace(TOOL_CALL_LINE_RE, '')
+    .replace(META_PAREN_LINE_RE, '')
     .replace(/\n{3,}/g, '\n\n')
     .trim()
   if (hasCards) {
@@ -549,6 +554,13 @@ function sanitizeAssistantText(text: string, hasCards: boolean): string {
     ].filter((i) => i !== -1)
     if (cutAt.length > 0) {
       cleaned = cleaned.slice(0, Math.min(...cutAt)).trim()
+    }
+    // With cards below, a single lead sentence is enough. Cut at the first
+    // terminator (., !, ?, :) so instructional follow-ups like "Выбирайте
+    // карточку для подробностей:" or duplicated openings get dropped.
+    const firstSentenceMatch = cleaned.match(/^[^.!?:\n]*[.!?:]/)
+    if (firstSentenceMatch) {
+      cleaned = firstSentenceMatch[0].replace(/[:]\s*$/, '').trim()
     }
   }
   return cleaned
