@@ -107,48 +107,66 @@ export function ArchivePanel() {
   }, [items])
 
   async function handleDelete(rec: Recording) {
+    const previous = rec
+    setItems((prev) => prev.filter((r) => r.id !== rec.id))
+    if (playing?.id === rec.id) setPlaying(null)
     try {
       await api.deleteRecording(rec.id)
-      setItems((prev) => prev.filter((r) => r.id !== rec.id))
-      if (playing?.id === rec.id) setPlaying(null)
     } catch (err) {
+      // Put the card back where it was — order-stability via created_at sort
+      // on the next poll is acceptable.
+      setItems((prev) => [previous, ...prev])
       setError(err instanceof Error ? err.message : String(err))
     }
   }
 
   async function handleCancel(rec: Recording) {
+    // Cancel on a recording that already captured content (paused with
+    // non-zero size, or running with segments on disk) finalises into `done`
+    // on the backend — not `failed`. Reflect the right target state right
+    // now so we don't flash `failed → paused → done` over 5-10s while the
+    // server finishes its ffmpeg concat pass and the next poll fires.
+    const hasContent = (rec.parts?.length ?? 0) > 0 && rec.bytes > 0
+    const optimistic: Recording['status'] = hasContent ? 'done' : 'failed'
+    const previous = rec
+    setItems((prev) =>
+      prev.map((r) =>
+        r.id === rec.id
+          ? { ...r, status: optimistic, error: hasContent ? '' : 'cancelled' }
+          : r,
+      ),
+    )
     try {
       await api.cancelRecording(rec.id)
-      // Optimistic update so the card flips to "failed" without waiting for
-      // the next 5 s poll.
-      setItems((prev) =>
-        prev.map((r) =>
-          r.id === rec.id ? { ...r, status: 'failed', error: 'cancelled' } : r,
-        ),
-      )
     } catch (err) {
+      // Roll back so the card isn't stuck in a fake done/failed state.
+      setItems((prev) => prev.map((r) => (r.id === rec.id ? previous : r)))
       setError(err instanceof Error ? err.message : String(err))
     }
   }
 
   async function handlePause(rec: Recording) {
+    const previous = rec
+    setItems((prev) =>
+      prev.map((r) => (r.id === rec.id ? { ...r, status: 'paused' } : r)),
+    )
     try {
       await api.pauseRecording(rec.id)
-      setItems((prev) =>
-        prev.map((r) => (r.id === rec.id ? { ...r, status: 'paused' } : r)),
-      )
     } catch (err) {
+      setItems((prev) => prev.map((r) => (r.id === rec.id ? previous : r)))
       setError(err instanceof Error ? err.message : String(err))
     }
   }
 
   async function handleResume(rec: Recording) {
+    const previous = rec
+    setItems((prev) =>
+      prev.map((r) => (r.id === rec.id ? { ...r, status: 'running' } : r)),
+    )
     try {
       await api.resumeRecording(rec.id)
-      setItems((prev) =>
-        prev.map((r) => (r.id === rec.id ? { ...r, status: 'running' } : r)),
-      )
     } catch (err) {
+      setItems((prev) => prev.map((r) => (r.id === rec.id ? previous : r)))
       setError(err instanceof Error ? err.message : String(err))
     }
   }
