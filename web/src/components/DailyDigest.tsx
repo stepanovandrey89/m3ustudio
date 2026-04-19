@@ -43,7 +43,12 @@ function formatGeneratedAt(
 // doesn't restart a background generation or lose already-fetched digests.
 const digestMemory = new Map<string, DigestResponse>()
 const digestInflight = new Map<string, Promise<DigestResponse>>()
-const CACHE_STORAGE_PREFIX = 'm3u_digest_v1:'
+// v2: bump after the backend started sanitising channel_id and ensures items
+// carry clean hex. v1 localStorage entries contained malformed ids like
+// '(id=hex)' that broke /api/logo URLs on render. Old keys get wiped on
+// mount so reloads come back clean.
+const CACHE_STORAGE_PREFIX = 'm3u_digest_v2:'
+const OLD_CACHE_PREFIXES = ['m3u_digest_v1:']
 
 function cacheKey(theme: DigestTheme, lang: string): string {
   return `${theme}::${lang}`
@@ -92,8 +97,28 @@ interface DailyDigestProps {
   onWatch: (entry: DigestEntry) => void
 }
 
+// One-shot cleanup: drop any leftover v1 cache entries the first time a
+// DailyDigest mounts. They contained poster / channel_id shapes the current
+// renderer can't handle.
+let _oldCachesSwept = false
+function sweepOldCaches(): void {
+  if (_oldCachesSwept) return
+  _oldCachesSwept = true
+  try {
+    const keys: string[] = []
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i)
+      if (k && OLD_CACHE_PREFIXES.some((p) => k.startsWith(p))) keys.push(k)
+    }
+    keys.forEach((k) => localStorage.removeItem(k))
+  } catch {
+    /* quota / privacy mode — ignore */
+  }
+}
+
 export function DailyDigest({ enabled, onPlan, onRecord, onWatch }: DailyDigestProps) {
   const { t, lang } = useI18n()
+  sweepOldCaches()
   const [active, setActive] = useState<DigestTheme>('sport')
   // Seed local state from the module-level cache so a remount after
   // navigating away shows the previously-fetched digests instantly.

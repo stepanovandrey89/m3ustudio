@@ -61,7 +61,10 @@ export const api = {
     `/api/transcode/${encodeURIComponent(channelId)}/index.m3u8`,
   exportUrl: (lang = 'ru') => `/api/export.m3u8?lang=${lang}`,
   exportNamesUrl: () => '/api/export/names.txt',
-  logoUrl: (channelId: string) => `/api/logo/${channelId}?v=2`,
+  logoUrl: (channelId: string) => {
+    const clean = (channelId || '').match(/[0-9a-f]{8,}/i)?.[0].toLowerCase() ?? channelId
+    return `/api/logo/${clean}?v=2`
+  },
   proxyUrl: (upstream: string) =>
     `/api/proxy?u=${encodeURIComponent(upstream)}`,
   importPlaylist: async (file: File, names?: string): Promise<{ ok: boolean; total: number }> => {
@@ -137,6 +140,12 @@ export const api = {
       method: 'POST',
     }),
   recordingFileUrl: (id: string) => `/api/recordings/${encodeURIComponent(id)}/file`,
+  // Safety belt: the AI occasionally ships channel_id as "(id=hex)" — strip
+  // the wrapping before any URL that uses it.
+  cleanChannelId: (raw: string): string => {
+    const m = (raw || '').match(/[0-9a-f]{8,}/i)
+    return m ? m[0].toLowerCase() : (raw || '').trim()
+  },
   recordingPartUrl: (id: string, index: number) =>
     `/api/recordings/${encodeURIComponent(id)}/part/${index}`,
   // ── Plans ─────────────────────────────────────────────────────────────

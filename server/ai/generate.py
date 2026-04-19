@@ -20,6 +20,7 @@ from server.ai.prompts import chat_system, digest_system
 from server.ai.tools import chat_tools
 
 _GROUP_SUFFIX_RE = re.compile(r"\s*\[[^\]]+\]\s*$")
+_CHANNEL_ID_RE = re.compile(r"[0-9a-f]{8,}", re.IGNORECASE)
 
 
 def _clean_channel_name(name: str) -> str:
@@ -28,6 +29,19 @@ def _clean_channel_name(name: str) -> str:
     not "Матч ТВ HD [Основное]".
     """
     return _GROUP_SUFFIX_RE.sub("", name or "").strip()
+
+
+def _clean_channel_id(raw: str) -> str:
+    """Pull the bare hex out of whatever the model stuck into `channel_id`.
+
+    The EPG header prints `(id=bcd48e4133ca)` and models sometimes copy the
+    whole marker verbatim — parens, `id=` prefix and all — which then
+    breaks `/api/logo/<id>` on the frontend. Extract the first hex run of
+    reasonable length; fall back to the raw string so nothing silently
+    drops when the model does the right thing.
+    """
+    m = _CHANNEL_ID_RE.search(raw or "")
+    return m.group(0).lower() if m else (raw or "").strip()
 
 
 async def generate_digest(
@@ -84,7 +98,7 @@ async def generate_digest(
 
     items = tuple(
         DigestEntry(
-            channel_id=str(i.get("channel_id", "")),
+            channel_id=_clean_channel_id(str(i.get("channel_id", ""))),
             channel_name=_clean_channel_name(str(i.get("channel_name", ""))),
             title=str(i.get("title", "")),
             start=str(i.get("start", "")),

@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 from server.ai.client import AIConfig, get_client
 from server.ai.context import build_main_schedule, channels_mentioned
 from server.ai.digest import ALL_THEMES, DigestCache, Theme
-from server.ai.generate import ToolExecutor, generate_digest, stream_chat
+from server.ai.generate import ToolExecutor, _clean_channel_id, generate_digest, stream_chat
 from server.ai.poster import PosterResolver
 from server.notify.telegram import TelegramClient, TelegramConfig
 from server.planner import PlanStore
@@ -434,6 +434,7 @@ async def _tool_record(
     poster_keywords: str = "",
     lang: str = "ru",
 ) -> dict[str, Any]:
+    channel_id = _clean_channel_id(channel_id)
     channel = state.playlist.by_id(channel_id)
     if channel is None:
         return {"ok": False, "error": f"unknown channel_id: {channel_id}"}
@@ -490,6 +491,8 @@ async def _tool_recommend(
     instead of a channel name. Returning ``ok:false`` surfaces the mistake
     so the next tool-calling round can self-correct or skip.
     """
+    # Sanitise '(id=X)' / 'id=X' wrappers the model occasionally keeps.
+    channel_id = _clean_channel_id(channel_id)
     channel = state.playlist.by_id(channel_id)
     if channel is None:
         return {
