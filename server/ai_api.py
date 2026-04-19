@@ -133,8 +133,16 @@ def build_router(state: Any) -> APIRouter:  # noqa: ANN401 — state is the main
     async def get_poster(
         keywords: str = Query(..., min_length=1),
         lang: str = Query(default="ru"),
+        fallback: str = Query(default=""),
     ) -> JSONResponse:
+        """Resolve a poster for keywords; if that fails, try the optional
+        fallback (usually the original programme title). Two-stage lookup
+        covers esoteric cases where the model-generated English keywords
+        don't hit TMDB but the native-language title does via Wikipedia.
+        """
         hit = await posters.resolve(keywords, lang)
+        if hit is None and fallback and fallback.strip() != keywords.strip():
+            hit = await posters.resolve(fallback, lang)
         if hit is None:
             return JSONResponse({"url": None, "source": "none"})
         return JSONResponse(hit.to_dict())

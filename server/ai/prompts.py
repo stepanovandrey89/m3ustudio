@@ -83,8 +83,10 @@ Rules:
   of the EPG line. They are ISO-8601 with a timezone offset (e.g.
   "2026-04-19T21:00:00+03:00"). Never trim, reformat, or invent them — the
   frontend countdown depends on the exact offset;
-- poster_keywords — latin, 2–4 words, examples: "Inception 2010 film",
-  "Severance TV series", "Real Madrid vs Barcelona"; for news — empty string.
+- poster_keywords — latin, 2–4 words separated by SPACES. Examples:
+  "Inception 2010 film", "Severance TV series", "Real Madrid vs Barcelona".
+  CamelCase / run-together words are FORBIDDEN (e.g. "InceptionFilm") —
+  TMDB matches them poorly and returns wrong covers. For news — empty string.
 """
 
 
@@ -147,11 +149,13 @@ assistant. Новости НЕ подаются отдельной темой. �
 • До 10 пунктов. Лучше меньше хороших, чем больше посредственных.
 • Если по теме в EPG нет достойных — верни {"items": []}. Не натягивай левое.
 
-poster_keywords (латиница, 2–4 слова):
-• фильм: «Inception 2010 film»
+poster_keywords (латиница, 2–4 слова через ПРОБЕЛ):
+• фильм: «Inception 2010 film» (НЕ «Inception2010film», НЕ «InceptionFilm»)
 • сериал: «Severance TV series»
 • спорт: «Real Madrid vs Barcelona»
 • новости/прочее: пустая строка.
+CamelCase / слитные слова ЗАПРЕЩЕНЫ — TMDB их плохо ищет и возвращает
+случайные обложки. Разделяй слова пробелами.
 """
 
 DIGEST_SYSTEM_EN = """You are a TV guide editor curating "the best on-theme for
@@ -221,11 +225,13 @@ HARD RULES:
 • Up to 10 picks. Fewer great picks beat more mediocre ones.
 • If nothing on-theme is good enough — return {"items": []}. Don't stretch it.
 
-poster_keywords (latin, 2–4 words):
-• film: "Inception 2010 film"
+poster_keywords (latin, 2–4 words separated by SPACES — never CamelCase):
+• film: "Inception 2010 film" (NOT "InceptionFilm")
 • TV show: "Severance TV series"
 • sport: "Real Madrid vs Barcelona"
 • news/other: empty string.
+Run-together words are rejected — TMDB matches them poorly and returns
+unrelated covers.
 """
 
 

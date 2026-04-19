@@ -337,7 +337,11 @@ function DigestCard({
   })
   const durMin = Math.max(1, Math.round((stop.getTime() - start.getTime()) / 60000))
   const isFeatured = index === 0
-  const poster = usePoster(entry.poster_keywords || entry.title, lang)
+  // Poster lookup: try the model-picked English keywords first; if TMDB
+  // comes back empty (common for esoteric Russian titles or CamelCase
+  // transliterations) the backend retries with the native programme title
+  // via Wikipedia.
+  const poster = usePoster(entry.poster_keywords || entry.title, lang, entry.title)
   const posterUrl = poster?.url ?? null
   const now = useNow(30_000)
   const countdown = formatCountdown(entry.start, now, lang)
