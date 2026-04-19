@@ -199,10 +199,24 @@ function App() {
     [mainChannels, flatSource],
   )
 
+  // Stable unique id for this tab — survives the tab's lifetime, changes
+  // across reloads. Used to make sure the BroadcastChannel listener in the
+  // current tab doesn't react to its OWN deep-link claim (BroadcastChannel
+  // delivers messages between different instances within the same document
+  // too, so without this guard a Telegram-opened tab would close itself
+  // the moment it claimed the link).
+  const tabIdRef = useRef<string>('')
+  if (!tabIdRef.current) {
+    tabIdRef.current =
+      typeof crypto !== 'undefined' && 'randomUUID' in crypto
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(36).slice(2)}`
+  }
+
   // Telegram "watch" button deep-link — when URL carries ?watch=<channel_id>,
   // auto-open the player once the playlist has finished loading. The new
-  // tab wins: it opens the player locally and asks any older dashboard tabs
-  // to close themselves so we don't accumulate duplicates.
+  // tab wins: it opens the player locally and asks any OTHER dashboard
+  // tabs to close themselves so we don't accumulate duplicates.
   const watchParamHandled = useRef(false)
   useEffect(() => {
     if (watchParamHandled.current) return
@@ -211,10 +225,8 @@ function App() {
     const channelId = params.get('watch')
     if (!channelId) return
     watchParamHandled.current = true
-    // Announce ourselves as the new active tab for this deep-link and open
-    // the player here. Older tabs listening on the channel will self-close.
     const channel = new BroadcastChannel('m3u-studio-route')
-    channel.postMessage({ type: 'watch-claim', channelId })
+    channel.postMessage({ type: 'watch-claim', channelId, tabId: tabIdRef.current })
     channel.close()
     openFromId(channelId)
     // Strip ?watch=... so a refresh doesn't re-fire the announcement.
@@ -226,15 +238,13 @@ function App() {
 
   // Listener in every dashboard tab: when a newer tab claims a ?watch=
   // deep-link, that tab becomes the active one and this (older) tab tries
-  // to close itself. Browsers only allow close() on tabs opened by script
-  // or from external apps — when it's blocked, the tab just stays put and
-  // the user sees two windows, which is the pre-existing behaviour.
+  // to close itself. Guards against echoes by checking tabId against our
+  // own; browsers that refuse window.close() leave the tab alone.
   useEffect(() => {
     const channel = new BroadcastChannel('m3u-studio-route')
     const onMessage = (e: MessageEvent) => {
       if (!e.data || e.data.type !== 'watch-claim') return
-      // The claimant tab just broadcast; anyone else listening is "older"
-      // by definition. Close best-effort.
+      if (e.data.tabId === tabIdRef.current) return
       try {
         window.close()
       } catch {
