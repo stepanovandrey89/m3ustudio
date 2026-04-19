@@ -792,7 +792,14 @@ function RecommendCard({ tool, lang, onPlan, onRecord }: RecommendCardProps) {
           {onRecord && channelId && start && stop && (
             <RecordButton
               onRecord={onRecord}
-              entry={{ channel_id: channelId, title, start, stop }}
+              entry={{
+                channel_id: channelId,
+                title,
+                start,
+                stop,
+                poster_keywords: String(tool.args.poster_keywords ?? ''),
+                blurb,
+              }}
             />
           )}
         </div>
