@@ -10,6 +10,7 @@ import {
   Eraser,
   Film,
   Loader2,
+  PlayCircle,
   Sparkles,
   Trophy,
   Video,
@@ -54,13 +55,20 @@ interface AIAssistantProps {
   loadingStatus: boolean
   onPlan?: (entry: RecommendedProgramme) => void | Promise<void>
   onRecord?: (entry: RecommendedProgramme) => void | Promise<void>
+  onWatch?: (entry: RecommendedProgramme) => void
 }
 
 // v2: ToolEvent gained `call_id` for proper tool_result matching.
 const STORAGE_KEY = 'm3u_ai_chat_v2'
 const DEEP_MODE_KEY = 'm3u_ai_deep_mode'
 
-export function AIAssistant({ enabled, loadingStatus, onPlan, onRecord }: AIAssistantProps) {
+export function AIAssistant({
+  enabled,
+  loadingStatus,
+  onPlan,
+  onRecord,
+  onWatch,
+}: AIAssistantProps) {
   const { t, lang } = useI18n()
   const [turns, setTurns] = useState<ChatTurn[]>(() => {
     try {
@@ -369,6 +377,7 @@ export function AIAssistant({ enabled, loadingStatus, onPlan, onRecord }: AIAssi
                     turn={turn}
                     onPlan={onPlan}
                     onRecord={onRecord}
+                    onWatch={onWatch}
                   />
                 ),
               )}
@@ -625,9 +634,15 @@ interface AssistantBubbleProps {
   turn: Extract<ChatTurn, { role: 'assistant' }>
   onPlan?: (entry: RecommendedProgramme) => void | Promise<void>
   onRecord?: (entry: RecommendedProgramme) => void | Promise<void>
+  onWatch?: (entry: RecommendedProgramme) => void
 }
 
-function AssistantBubble({ turn, onPlan, onRecord }: AssistantBubbleProps) {
+function AssistantBubble({
+  turn,
+  onPlan,
+  onRecord,
+  onWatch,
+}: AssistantBubbleProps) {
   const { t } = useI18n()
   return (
     <motion.div
@@ -666,6 +681,7 @@ function AssistantBubble({ turn, onPlan, onRecord }: AssistantBubbleProps) {
               tool={tool}
               onPlan={onPlan}
               onRecord={onRecord}
+              onWatch={onWatch}
             />
           ))}
           {turn.streaming && !turn.text && (
@@ -684,13 +700,20 @@ interface ToolCardProps {
   tool: ToolEvent
   onPlan?: (entry: RecommendedProgramme) => void | Promise<void>
   onRecord?: (entry: RecommendedProgramme) => void | Promise<void>
+  onWatch?: (entry: RecommendedProgramme) => void
 }
 
-function ToolCard({ tool, onPlan, onRecord }: ToolCardProps) {
+function ToolCard({ tool, onPlan, onRecord, onWatch }: ToolCardProps) {
   const { t, lang } = useI18n()
   if (tool.name === 'recommend_programme') {
     return (
-      <RecommendCard tool={tool} lang={lang} onPlan={onPlan} onRecord={onRecord} />
+      <RecommendCard
+        tool={tool}
+        lang={lang}
+        onPlan={onPlan}
+        onRecord={onRecord}
+        onWatch={onWatch}
+      />
     )
   }
   if (tool.name === 'record_programme') {
@@ -738,9 +761,16 @@ interface RecommendCardProps {
   lang: string
   onPlan?: (entry: RecommendedProgramme) => void | Promise<void>
   onRecord?: (entry: RecommendedProgramme) => void | Promise<void>
+  onWatch?: (entry: RecommendedProgramme) => void
 }
 
-function RecommendCard({ tool, lang, onPlan, onRecord }: RecommendCardProps) {
+function RecommendCard({
+  tool,
+  lang,
+  onPlan,
+  onRecord,
+  onWatch,
+}: RecommendCardProps) {
   const { t } = useI18n()
   const res = (tool.result ?? {}) as {
     ok?: boolean
@@ -790,11 +820,28 @@ function RecommendCard({ tool, lang, onPlan, onRecord }: RecommendCardProps) {
       : 0
   const now = useNow(30_000)
   const countdown = start ? formatCountdown(start, now, lang) : ''
-  // Cached AI replies persist across sessions, so a card rendered yesterday
-  // can still be in the chat history when the programme already aired. Plan
-  // and Record are meaningless in that state — show a muted "aired" badge
-  // instead of live action buttons.
-  const ended = !!stop && new Date(stop).getTime() <= now.getTime()
+  // Programme phase drives which actions make sense. Cards in the chat
+  // history outlive the programme itself, so we re-evaluate every 30 s.
+  //   upcoming : start > now          → Plan + Record
+  //   live     : start <= now < stop  → Watch + Record
+  //   ended    : now >= stop          → muted "aired" badge
+  const nowMs = now.getTime()
+  const startMs = start ? new Date(start).getTime() : 0
+  const stopMs = stop ? new Date(stop).getTime() : 0
+  const phase: 'upcoming' | 'live' | 'ended' =
+    stopMs && nowMs >= stopMs
+      ? 'ended'
+      : startMs && nowMs >= startMs
+        ? 'live'
+        : 'upcoming'
+  const entry: RecommendedProgramme = {
+    channel_id: channelId,
+    title,
+    start,
+    stop,
+    poster_keywords: String(tool.args.poster_keywords ?? ''),
+    blurb,
+  }
 
   return (
     <motion.div
@@ -873,37 +920,33 @@ function RecommendCard({ tool, lang, onPlan, onRecord }: RecommendCardProps) {
           )}
         </div>
         <div className="flex items-center gap-1.5">
-          {ended ? (
+          {phase === 'ended' ? (
             <span className="inline-flex items-center rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] text-fog-200/60">
               {t('digest_aired')}
             </span>
+          ) : phase === 'live' ? (
+            <>
+              {onWatch && channelId && (
+                <button
+                  type="button"
+                  onClick={() => onWatch(entry)}
+                  className="flex items-center gap-1 rounded-full bg-[var(--color-rose-primary)] px-2.5 py-1 text-[11px] font-medium text-white transition hover:brightness-110"
+                >
+                  <PlayCircle className="h-3 w-3" />
+                  {t('digest_watch_now')}
+                </button>
+              )}
+              {onRecord && channelId && start && stop && (
+                <RecordButton onRecord={onRecord} entry={entry} />
+              )}
+            </>
           ) : (
             <>
               {onPlan && channelId && start && stop && (
-                <PlanButton
-                  onPlan={onPlan}
-                  entry={{
-                    channel_id: channelId,
-                    title,
-                    start,
-                    stop,
-                    poster_keywords: String(tool.args.poster_keywords ?? ''),
-                    blurb,
-                  }}
-                />
+                <PlanButton onPlan={onPlan} entry={entry} />
               )}
               {onRecord && channelId && start && stop && (
-                <RecordButton
-                  onRecord={onRecord}
-                  entry={{
-                    channel_id: channelId,
-                    title,
-                    start,
-                    stop,
-                    poster_keywords: String(tool.args.poster_keywords ?? ''),
-                    blurb,
-                  }}
-                />
+                <RecordButton onRecord={onRecord} entry={entry} />
               )}
             </>
           )}

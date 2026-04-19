@@ -649,6 +649,7 @@ function App() {
             loadingStatus={aiEnabled === null}
             onPlan={handlePlanFromAI}
             onRecord={handleRecordFromAI}
+            onWatch={(entry) => openFromId(entry.channel_id)}
           />
         </div>
       ) : section === 'today' ? (
