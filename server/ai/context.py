@@ -29,6 +29,180 @@ def _normalize_for_match(text: str) -> str:
     return re.sub(r"\s+", " ", lowered).strip()
 
 
+# Stop words we want to skip when extracting programme-search terms from the
+# user's free-form question. These are so common that requiring a title
+# contain them would either match everything or filter out all the useful
+# programmes. Kept short; we're not chasing a full-blown NLP stop-list.
+_SEARCH_STOPWORDS: frozenset[str] = frozenset(
+    {
+        # RU
+        "когда",
+        "будет",
+        "ближайший",
+        "ближайшая",
+        "следующий",
+        "следующая",
+        "показывают",
+        "показ",
+        "сеанс",
+        "фильм",
+        "фильма",
+        "фильмы",
+        "кино",
+        "сериал",
+        "матч",
+        "трансляция",
+        "передача",
+        "передачи",
+        "что",
+        "где",
+        "какой",
+        "какая",
+        "сегодня",
+        "завтра",
+        "вчера",
+        "вечером",
+        "утром",
+        "днём",
+        "ночью",
+        "час",
+        "часа",
+        "часов",
+        "мин",
+        "минут",
+        "канал",
+        "канале",
+        "каналу",
+        "телеканал",
+        "телеканала",
+        "есть",
+        "ли",
+        "да",
+        "нет",
+        "мне",
+        "тебе",
+        "про",
+        "для",
+        "эти",
+        "это",
+        "того",
+        "этого",
+        "как",
+        "или",
+        "но",
+        "нужно",
+        "хочу",
+        "покажи",
+        "найди",
+        "пожалуйста",
+        # EN
+        "when",
+        "will",
+        "next",
+        "nearest",
+        "show",
+        "movie",
+        "film",
+        "series",
+        "match",
+        "broadcast",
+        "programme",
+        "program",
+        "what",
+        "where",
+        "today",
+        "tomorrow",
+        "yesterday",
+        "evening",
+        "morning",
+        "afternoon",
+        "night",
+        "channel",
+        "there",
+        "any",
+        "please",
+        "find",
+        "me",
+        "the",
+        "a",
+        "an",
+        "is",
+        "are",
+        "be",
+        "on",
+        "at",
+        "in",
+        "for",
+        "of",
+        "to",
+        "and",
+        "or",
+        "but",
+        "with",
+    }
+)
+
+
+def _search_keywords(text: str) -> list[str]:
+    """Return lowercase content words from ``text`` useful for EPG filtering.
+
+    Tokens are ≥ 4 chars to skip prepositions/particles the stop-list might
+    miss, and stop-listed forms are dropped. Preserves the original order
+    so multi-word titles can still be matched as phrases later if needed.
+    """
+    tokens = re.findall(r"[\wёЁ]+", text.lower(), flags=re.UNICODE)
+    out: list[str] = []
+    for tok in tokens:
+        if len(tok) < 4:
+            continue
+        if tok in _SEARCH_STOPWORDS:
+            continue
+        if tok.isdigit():
+            continue
+        out.append(tok)
+    return out
+
+
+def narrow_by_programme_content(
+    text: str,
+    schedules: list[ChannelSchedule],
+    min_hits_to_apply: int = 1,
+) -> list[ChannelSchedule]:
+    """Shrink a schedule list to only programmes whose title/description match
+    keywords in the user's latest message.
+
+    Used in deep-search mode when the question targets a specific programme
+    ("когда будет фильм Американский ниндзя?") — no reason to ship 149
+    channels × 7 days of EPG when a handful of title matches answer the
+    question. Returns the input unchanged if fewer than ``min_hits_to_apply``
+    matches are found so open-ended queries don't get clipped to empty.
+    """
+    keywords = _search_keywords(text)
+    if not keywords:
+        return schedules
+    narrowed: list[ChannelSchedule] = []
+    hits_total = 0
+    for sch in schedules:
+        matching = tuple(
+            p
+            for p in sch.programmes
+            if any(k in p.title.lower() or k in p.description.lower() for k in keywords)
+        )
+        if matching:
+            narrowed.append(
+                ChannelSchedule(
+                    channel_id=sch.channel_id,
+                    channel_name=sch.channel_name,
+                    group=sch.group,
+                    programmes=matching,
+                )
+            )
+            hits_total += len(matching)
+    if hits_total < min_hits_to_apply:
+        return schedules
+    return narrowed
+
+
 def channels_mentioned(text: str, channels: list[Channel]) -> list[Channel]:
     """Return the subset of ``channels`` whose name appears in ``text``.
 

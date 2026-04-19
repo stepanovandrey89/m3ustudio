@@ -19,7 +19,11 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from server.ai.client import AIConfig, get_client
-from server.ai.context import build_main_schedule, channels_mentioned
+from server.ai.context import (
+    build_main_schedule,
+    channels_mentioned,
+    narrow_by_programme_content,
+)
 from server.ai.digest import ALL_THEMES, DigestCache, Theme
 from server.ai.generate import ToolExecutor, _clean_channel_id, generate_digest, stream_chat
 from server.ai.poster import PosterResolver
@@ -234,6 +238,13 @@ def build_router(state: Any) -> APIRouter:  # noqa: ANN401 — state is the main
             future_hours=future_hours,
             only_upcoming=True,
         )
+        # Deep search across 149 channels × 7 days routinely blows past the
+        # model's input limit when the user asks about a specific programme
+        # ("когда будет фильм X?"). Narrow by content keywords *if* there's
+        # something to match — open-ended "what's good this week" queries
+        # still see the full slate.
+        if body.deep_search and len(scoped_channels) == len(main_channels):
+            schedules = narrow_by_programme_content(last_user_msg, schedules)
         history = [m.model_dump() for m in body.messages]
 
         # Tool executor bound to this request's channel map.
