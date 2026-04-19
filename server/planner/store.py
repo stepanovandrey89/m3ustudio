@@ -161,6 +161,13 @@ class PlanStore:
             )
             self._save()
 
+    def clear_tg_messages(self, plan_id: str) -> None:
+        """Zero-out stored Telegram message ids after they've been deleted."""
+        p = self._plans.get(plan_id)
+        if p:
+            self._plans[plan_id] = replace(p, tg_created_msg_id=None, tg_live_msg_id=None)
+            self._save()
+
     def set_status(self, plan_id: str, status: PlanStatus) -> None:
         p = self._plans.get(plan_id)
         if p and status in VALID_STATUSES:

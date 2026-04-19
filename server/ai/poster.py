@@ -45,6 +45,8 @@ class PosterResolver:
         self._cache_dir = cache_dir
         self._cache_dir.mkdir(parents=True, exist_ok=True)
         self._file = cache_dir / "posters.json"
+        self._img_dir = cache_dir / "posters_img"
+        self._img_dir.mkdir(parents=True, exist_ok=True)
         self._mem: dict[str, tuple[float, PosterHit | None]] = self._load()
         self._lock = asyncio.Lock()
         self._tmdb_key = os.environ.get("TMDB_API_KEY", "").strip()
@@ -52,6 +54,44 @@ class PosterResolver:
     @property
     def root(self) -> Path:
         return self._cache_dir
+
+    @property
+    def img_dir(self) -> Path:
+        return self._img_dir
+
+    def local_path_for(self, remote_url: str) -> Path:
+        """Return the deterministic local cache path for a remote image URL."""
+        import hashlib
+        from pathlib import PurePath
+
+        digest = hashlib.sha1(remote_url.encode("utf-8")).hexdigest()
+        ext = PurePath(remote_url.split("?", 1)[0]).suffix.lower()
+        if ext not in (".jpg", ".jpeg", ".png", ".webp", ".gif"):
+            ext = ".jpg"
+        return self._img_dir / f"{digest}{ext}"
+
+    async def prefetch(self, remote_url: str, client: httpx.AsyncClient | None = None) -> bool:
+        """Download a poster image to local cache if not already present."""
+        path = self.local_path_for(remote_url)
+        if path.exists() and path.stat().st_size > 0:
+            return True
+        owns_client = client is None
+        if client is None:
+            client = httpx.AsyncClient(
+                timeout=10.0,
+                follow_redirects=True,
+                headers={"User-Agent": "m3u-studio/0.7 (poster-prefetch)"},
+            )
+        try:
+            resp = await client.get(remote_url)
+            resp.raise_for_status()
+            path.write_bytes(resp.content)
+            return True
+        except (httpx.HTTPError, OSError):
+            return False
+        finally:
+            if owns_client:
+                await client.aclose()
 
     def _load(self) -> dict[str, tuple[float, PosterHit | None]]:
         if not self._file.exists():
@@ -110,16 +150,19 @@ class PosterResolver:
         async with httpx.AsyncClient(
             timeout=6.0,
             follow_redirects=True,
-            headers={"User-Agent": "m3u-studio/0.6 (poster-lookup)"},
+            headers={"User-Agent": "m3u-studio/0.7 (poster-lookup)"},
         ) as client:
+            hit: PosterHit | None = None
             if self._tmdb_key:
-                tmdb = await _tmdb_search(client, keywords, lang, self._tmdb_key)
-                if tmdb:
-                    return tmdb
-            wiki = await _wiki_lookup(client, keywords, lang)
-            if wiki:
-                return wiki
-        return None
+                hit = await _tmdb_search(client, keywords, lang, self._tmdb_key)
+            if hit is None:
+                hit = await _wiki_lookup(client, keywords, lang)
+            if hit is not None:
+                # Pre-fetch the image so the frontend's first render hits a
+                # file on disk instead of racing with the TMDB/Wiki round-trip.
+                # Failure here is silent — the proxy endpoint will retry.
+                await self.prefetch(hit.url, client=client)
+            return hit
 
 
 async def _tmdb_search(

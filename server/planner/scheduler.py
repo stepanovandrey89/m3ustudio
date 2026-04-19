@@ -83,6 +83,18 @@ async def _tick(store: PlanStore) -> None:
 
     store.mark_missed_stale(now)
 
+    # After the sweep, any plan newly flipped to `done` still has its
+    # "🔴 Начинается сейчас" card hanging in the chat — clear it so the
+    # Telegram group only keeps active / upcoming entries, not stale ones.
+    for plan in list(store.list()):
+        if plan.status != "done":
+            continue
+        if not plan.tg_live_msg_id:
+            continue
+        with contextlib.suppress(Exception):
+            await client.delete_message(plan.tg_live_msg_id)
+        store.clear_tg_messages(plan.id)
+
 
 async def notify_plan_created(
     plan: Plan,
