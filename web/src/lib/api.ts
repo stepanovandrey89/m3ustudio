@@ -120,6 +120,8 @@ export const api = {
     start: string
     stop: string
     theme?: DigestTheme
+    poster_keywords?: string
+    lang?: string
   }) =>
     request<{ ok: boolean; recording: Recording }>('/api/recordings', {
       method: 'POST',

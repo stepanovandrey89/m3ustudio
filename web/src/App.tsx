@@ -266,22 +266,33 @@ function App() {
           start: entry.start,
           stop: entry.stop,
           theme,
+          // Forward the AI-picked poster query so the archive card uses the
+          // precise match ("The Game 1997 film") instead of falling back to
+          // the bare title ("Игра") and pulling a random TMDB hit.
+          poster_keywords: entry.poster_keywords,
+          lang,
         })
       } catch (err) {
         console.error('record failed', err)
       }
     },
-    [],
+    [lang],
   )
   const handleRecordFromAI = useCallback(
-    async (entry: { channel_id: string; title: string; start: string; stop: string }) => {
+    async (entry: {
+      channel_id: string
+      title: string
+      start: string
+      stop: string
+      poster_keywords?: string
+    }) => {
       try {
-        await api.startRecording({ ...entry, theme: 'assistant' })
+        await api.startRecording({ ...entry, theme: 'assistant', lang })
       } catch (err) {
         console.error('record failed', err)
       }
     },
-    [],
+    [lang],
   )
   // "Запланировать" — новая кнопка на карточках. Создаёт план + пушит в Telegram.
   const handlePlanFromDigest = useCallback(
@@ -646,7 +657,7 @@ function App() {
         </div>
       ) : (
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-          <ArchivePanel />
+          <ArchivePanel onWatchLive={openFromId} />
         </div>
       )}
       </div>
