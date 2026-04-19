@@ -530,8 +530,28 @@ function applyEvent(
 const TOOL_CALL_LINE_RE =
   /^[ \t]*(?:recommend_programme|record_programme|list_recordings)\s*\(.*$/gm
 
-function sanitizeAssistantText(text: string): string {
-  return text.replace(TOOL_CALL_LINE_RE, '').replace(/\n{3,}/g, '\n\n').trim()
+// Even when tool calls fire correctly, the model often re-dictates the same
+// picks as a numbered list ("1) Смерч — стартует 14:19 (CineMan VHS)") right
+// above the cards. If we already have cards, cut the prose at the first
+// enumerator so only the lead-in sentence survives.
+const NUMBERED_LIST_RE = /\n\s*\d+[).]\s/
+const BULLET_LIST_RE = /\n\s*[-•]\s/
+
+function sanitizeAssistantText(text: string, hasCards: boolean): string {
+  let cleaned = text
+    .replace(TOOL_CALL_LINE_RE, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+  if (hasCards) {
+    const cutAt = [
+      cleaned.search(NUMBERED_LIST_RE),
+      cleaned.search(BULLET_LIST_RE),
+    ].filter((i) => i !== -1)
+    if (cutAt.length > 0) {
+      cleaned = cleaned.slice(0, Math.min(...cutAt)).trim()
+    }
+  }
+  return cleaned
 }
 
 function UserBubble({ text }: { text: string }) {
@@ -570,7 +590,10 @@ function AssistantBubble({ turn, onPlan, onRecord }: AssistantBubbleProps) {
         </div>
         <div className="flex flex-col gap-2">
           {(() => {
-            const cleaned = sanitizeAssistantText(turn.text)
+            const hasCards = turn.tools.some(
+              (tc) => tc.name === 'recommend_programme' && tc.result,
+            )
+            const cleaned = sanitizeAssistantText(turn.text, hasCards)
             if (!cleaned) return null
             return (
               <div className="whitespace-pre-wrap text-[14px] leading-[1.6] text-fog-100">
