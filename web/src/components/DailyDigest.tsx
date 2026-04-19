@@ -444,11 +444,11 @@ function DigestCard({
   })
   const durMin = Math.max(1, Math.round((stop.getTime() - start.getTime()) / 60000))
   const isFeatured = index === 0
-  // Poster lookup: try the model-picked English keywords first; if TMDB
-  // comes back empty (common for esoteric Russian titles or CamelCase
-  // transliterations) the backend retries with the native programme title
-  // via Wikipedia.
-  const poster = usePoster(entry.poster_keywords || entry.title, lang, entry.title)
+  // Poster lookup prefers the full EPG title — a truncated one-word keyword
+  // like "Смерч" matches any film that shares the token on TMDB/Wiki and
+  // returns the wrong poster. The Latin ``poster_keywords`` hint is kept as
+  // a fallback for cases where the full title draws a blank.
+  const poster = usePoster(entry.title, lang, entry.poster_keywords || '')
   const posterUrl = poster?.url ?? null
   const now = useNow(30_000)
   const countdown = formatCountdown(entry.start, now, lang)

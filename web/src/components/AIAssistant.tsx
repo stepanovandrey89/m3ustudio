@@ -456,8 +456,36 @@ type StreamEvent =
  * record_programme confirmations) keep their original order and fall to the
  * end of the sorted list.
  */
+// Build a stable identity for a recommend_programme tool event so two cards
+// pointing at the very same broadcast collapse into one. The model sometimes
+// re-emits the same recommendation across rounds or even within a single
+// response, which surfaces as adjacent duplicate cards in the bubble.
+function recommendIdentity(tool: ToolEvent): string | null {
+  if (tool.name !== 'recommend_programme') return null
+  const res = (tool.result ?? {}) as {
+    channel_id?: string
+    title?: string
+    start?: string
+  }
+  const channel = String(res.channel_id ?? tool.args?.channel_id ?? '').toLowerCase()
+  const title = String(res.title ?? tool.args?.title ?? '')
+    .trim()
+    .toLowerCase()
+  const start = String(res.start ?? tool.args?.start ?? '')
+  if (!channel || !title || !start) return null
+  return `${channel}::${title}::${start}`
+}
+
 function sortToolsByStart(tools: ToolEvent[]): ToolEvent[] {
-  return [...tools].sort((a, b) => {
+  const seen = new Set<string>()
+  const deduped = tools.filter((t) => {
+    const key = recommendIdentity(t)
+    if (!key) return true
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+  return deduped.sort((a, b) => {
     const aStart = String(a.args?.start ?? (a.result as { start?: string })?.start ?? '')
     const bStart = String(b.args?.start ?? (b.result as { start?: string })?.start ?? '')
     if (!aStart && !bStart) return 0

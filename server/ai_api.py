@@ -354,14 +354,9 @@ def build_router(state: Any) -> APIRouter:  # noqa: ANN401 — state is the main
             raise HTTPException(404, f"unknown channel_id: {body.channel_id}")
 
         # Resolve poster synchronously so the Telegram card has a hero image.
-        poster_url = ""
-        keywords = (body.poster_keywords or body.title).strip()
-        if keywords:
-            try:
-                hit = await posters.resolve(keywords, body.lang)
-                poster_url = hit.url if hit else ""
-            except Exception:  # noqa: BLE001
-                poster_url = ""
+        poster_url = await _resolve_poster_for_title(
+            posters, body.title, body.poster_keywords, body.lang,
+        )
 
         plan = plans.add(
             channel_id=body.channel_id,
@@ -434,6 +429,32 @@ def build_router(state: Any) -> APIRouter:  # noqa: ANN401 — state is the main
 # ---------------------------------------------------------------------------
 
 
+async def _resolve_poster_for_title(
+    posters: PosterResolver,
+    title: str,
+    poster_keywords: str,
+    lang: str,
+) -> str:
+    """Resolve a poster URL preferring the full programme title.
+
+    Short keyword-only queries (``"Смерч"``) collide with every film that
+    happens to share a word, so the full EPG title is always tried first and
+    the Latin ``poster_keywords`` hint only steps in when that misses.
+    Returns an empty string on any failure so callers can just plug it in.
+    """
+    primary = (title or "").strip()
+    fallback = (poster_keywords or "").strip()
+    try:
+        hit = None
+        if primary:
+            hit = await posters.resolve(primary, lang)
+        if hit is None and fallback and fallback.lower() != primary.lower():
+            hit = await posters.resolve(fallback, lang)
+        return hit.url if hit else ""
+    except Exception:  # noqa: BLE001 — poster is cosmetic
+        return ""
+
+
 async def _tool_record(
     state: Any,  # noqa: ANN401
     *,
@@ -449,15 +470,9 @@ async def _tool_record(
     channel = state.playlist.by_id(channel_id)
     if channel is None:
         return {"ok": False, "error": f"unknown channel_id: {channel_id}"}
-    # Poster lookup is best-effort — a miss just leaves the card without art.
-    poster_url = ""
-    keywords = (poster_keywords or title).strip()
-    if keywords:
-        try:
-            hit = await state.posters.resolve(keywords, lang)
-            poster_url = hit.url if hit else ""
-        except Exception:  # noqa: BLE001
-            poster_url = ""
+    poster_url = await _resolve_poster_for_title(
+        state.posters, title, poster_keywords, lang,
+    )
     try:
         entry = await state.recordings.schedule(
             channel_id=channel_id,
@@ -514,14 +529,10 @@ async def _tool_recommend(
             "channel_id": channel_id,
             "title": title,
         }
-    keywords = (poster_keywords or title).strip()
-    poster_url: str | None = None
-    if keywords:
-        try:
-            hit = await state.posters.resolve(keywords, lang)
-            poster_url = hit.url if hit else None
-        except Exception:  # noqa: BLE001 — UI degrades gracefully
-            poster_url = None
+    resolved = await _resolve_poster_for_title(
+        state.posters, title, poster_keywords, lang,
+    )
+    poster_url: str | None = resolved or None
     return {
         "ok": True,
         "channel_id": channel_id,
