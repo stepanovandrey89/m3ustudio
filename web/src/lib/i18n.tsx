@@ -410,13 +410,24 @@ const I18nContext = createContext<I18nContextValue>({
   t: (key) => key,
 })
 
+function detectBrowserLang(): Lang {
+  if (typeof navigator === 'undefined') return 'en'
+  const candidates = [navigator.language, ...(navigator.languages ?? [])]
+  for (const raw of candidates) {
+    if (!raw) continue
+    const code = raw.toLowerCase().split('-')[0]
+    if (code === 'ru' || code === 'uk' || code === 'be' || code === 'kk') return 'ru'
+  }
+  return 'en'
+}
+
 export function I18nProvider({ children }: { children: ReactNode }) {
   const [lang, setLangState] = useState<Lang>(() => {
     try {
       const stored = localStorage.getItem(STORAGE_KEY)
       if (stored === 'ru' || stored === 'en') return stored
     } catch { /* */ }
-    return 'en'
+    return detectBrowserLang()
   })
 
   useEffect(() => {

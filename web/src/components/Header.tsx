@@ -90,27 +90,26 @@ export function Header({ duplicatesCount, theme, onToggleTheme, onReload, onShow
           >
             {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
           </button>
-          {!isMobile && (
-            <button
-              ref={settingsBtnRef}
-              type="button"
-              onClick={() => { setShowSettingsMenu((v) => !v); setConfirmClear(false) }}
-              className={cn(
-                'relative flex h-9 w-9 items-center justify-center rounded-lg border transition',
-                showSettingsMenu
-                  ? 'border-white/20 bg-white/10 text-white'
-                  : 'border-white/10 bg-white/5 text-fog-200 hover:border-white/20 hover:bg-white/10 hover:text-white',
-              )}
-              title={t('settings')}
-            >
-              <Settings2 className="h-4 w-4" />
-              {duplicatesCount > 0 && (
-                <span className="absolute -right-1 -top-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-amber-500 px-0.5 text-[8px] font-bold text-black">
-                  {duplicatesCount}
-                </span>
-              )}
-            </button>
-          )}
+          <button
+            ref={settingsBtnRef}
+            type="button"
+            onClick={() => { setShowSettingsMenu((v) => !v); setConfirmClear(false) }}
+            className={cn(
+              'relative flex h-9 w-9 items-center justify-center rounded-lg border transition',
+              showSettingsMenu
+                ? 'border-white/20 bg-white/10 text-white'
+                : 'border-white/10 bg-white/5 text-fog-200 hover:border-white/20 hover:bg-white/10 hover:text-white',
+            )}
+            title={t('settings')}
+            aria-label={t('settings')}
+          >
+            <Settings2 className="h-4 w-4" />
+            {duplicatesCount > 0 && (
+              <span className="absolute -right-1 -top-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-amber-500 px-0.5 text-[8px] font-bold text-black">
+                {duplicatesCount}
+              </span>
+            )}
+          </button>
         </div>
       </header>
 
@@ -118,15 +117,37 @@ export function Header({ duplicatesCount, theme, onToggleTheme, onReload, onShow
       {createPortal(
         <AnimatePresence>
           {showSettingsMenu && (
+            <>
+              {isMobile && (
+                <motion.div
+                  key="backdrop"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.12 }}
+                  onClick={() => { setShowSettingsMenu(false); setConfirmClear(false) }}
+                  className="fixed inset-0 z-[9998] bg-black/50 backdrop-blur-sm"
+                />
+              )}
             <motion.div
               ref={settingsMenuRef}
-              initial={{ opacity: 0, y: -6, scale: 0.97 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: -6, scale: 0.97 }}
-              transition={{ duration: 0.12 }}
-              style={{ top: settingsMenuPos.top, right: settingsMenuPos.right }}
-              className="fixed z-[9999] w-56 overflow-hidden rounded-xl border border-white/10 bg-[#181620] shadow-2xl"
+              initial={isMobile ? { opacity: 0, y: 24 } : { opacity: 0, y: -6, scale: 0.97 }}
+              animate={isMobile ? { opacity: 1, y: 0 } : { opacity: 1, y: 0, scale: 1 }}
+              exit={isMobile ? { opacity: 0, y: 24 } : { opacity: 0, y: -6, scale: 0.97 }}
+              transition={{ duration: 0.16 }}
+              style={isMobile ? undefined : { top: settingsMenuPos.top, right: settingsMenuPos.right }}
+              className={cn(
+                'fixed z-[9999] overflow-auto overscroll-contain border border-white/10 bg-[#181620] shadow-2xl',
+                isMobile
+                  ? 'inset-x-0 bottom-0 max-h-[85vh] rounded-t-2xl pb-[env(safe-area-inset-bottom)]'
+                  : 'w-56 rounded-xl',
+              )}
             >
+              {isMobile && (
+                <div className="flex justify-center py-2">
+                  <span className="h-1 w-10 rounded-full bg-white/20" />
+                </div>
+              )}
               {/* Import */}
               <button
                 type="button"
@@ -268,6 +289,7 @@ export function Header({ duplicatesCount, theme, onToggleTheme, onReload, onShow
                 )}
               </AnimatePresence>
             </motion.div>
+            </>
           )}
         </AnimatePresence>,
         document.body,
