@@ -703,7 +703,7 @@ function RecommendCard({ tool, lang, onPlan, onRecord }: RecommendCardProps) {
   // can still be in the chat history when the programme already aired. Plan
   // and Record are meaningless in that state — show a muted "aired" badge
   // instead of live action buttons.
-  const ended = !!stop && new Date(stop).getTime() <= now
+  const ended = !!stop && new Date(stop).getTime() <= now.getTime()
 
   return (
     <motion.div
