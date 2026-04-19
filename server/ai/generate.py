@@ -21,6 +21,14 @@ from server.ai.tools import chat_tools
 
 _GROUP_SUFFIX_RE = re.compile(r"\s*\[[^\]]+\]\s*$")
 _CHANNEL_ID_RE = re.compile(r"[0-9a-f]{8,}", re.IGNORECASE)
+# gpt-5-mini sometimes narrates its function calls as plain text
+# ("recommend_programme({...})") in addition to emitting the proper tool_call
+# channel event. Strip whole lines that start with one of our tool names and
+# an opening paren so the prose stays clean. Applied on streamed text deltas.
+_TOOL_CALL_LINE_RE = re.compile(
+    r"^[ \t]*(?:recommend_programme|record_programme|list_recordings)\s*\(.*$",
+    re.MULTILINE,
+)
 
 
 def _clean_channel_name(name: str) -> str:
@@ -267,6 +275,14 @@ async def _one_round(
     collected_text: list[str] = []
     # Aggregate streaming tool-call deltas by index.
     tool_calls: dict[int, dict[str, Any]] = {}
+    # Line-buffer streamed prose so we can drop whole lines that look like a
+    # function-call invocation ("recommend_programme({...})") before they hit
+    # the frontend. We emit one complete line at a time, holding the current
+    # partial line until a '\n' or end-of-stream.
+    line_buffer = ""
+
+    def _drop_tool_call_line(line: str) -> bool:
+        return _TOOL_CALL_LINE_RE.match(line.rstrip("\r")) is not None
 
     async for chunk in stream:
         if not chunk.choices:
@@ -274,7 +290,12 @@ async def _one_round(
         delta = chunk.choices[0].delta
         if delta.content:
             collected_text.append(delta.content)
-            yield {"type": "delta", "text": delta.content}
+            line_buffer += delta.content
+            while "\n" in line_buffer:
+                line, _, line_buffer = line_buffer.partition("\n")
+                if _drop_tool_call_line(line):
+                    continue
+                yield {"type": "delta", "text": line + "\n"}
         if delta.tool_calls:
             for tc in delta.tool_calls:
                 idx = tc.index or 0
@@ -288,6 +309,11 @@ async def _one_round(
                     bucket["name"] = tc.function.name
                 if tc.function and tc.function.arguments:
                     bucket["arguments"] += tc.function.arguments
+
+    # Flush the final line of prose (no trailing newline) unless it itself is
+    # a stray tool-call narration.
+    if line_buffer and not _drop_tool_call_line(line_buffer):
+        yield {"type": "delta", "text": line_buffer}
 
     # Emit tool calls after stream completes.
     if tool_calls:

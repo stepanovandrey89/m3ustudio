@@ -522,6 +522,18 @@ function applyEvent(
   return turn
 }
 
+// gpt-5-mini occasionally dictates its own function call into prose instead
+// of (or on top of) emitting a proper tool_call channel event. That leaks a
+// line like `recommend_programme({"channel_id": "...", ...})` into the chat
+// bubble even though the actual card renders fine afterwards from the tool
+// result. Strip those lines so the narration stays clean.
+const TOOL_CALL_LINE_RE =
+  /^[ \t]*(?:recommend_programme|record_programme|list_recordings)\s*\(.*$/gm
+
+function sanitizeAssistantText(text: string): string {
+  return text.replace(TOOL_CALL_LINE_RE, '').replace(/\n{3,}/g, '\n\n').trim()
+}
+
 function UserBubble({ text }: { text: string }) {
   return (
     <motion.div
@@ -557,18 +569,22 @@ function AssistantBubble({ turn, onPlan, onRecord }: AssistantBubbleProps) {
           <Sparkles className="h-3.5 w-3.5 text-white" />
         </div>
         <div className="flex flex-col gap-2">
-          {turn.text && (
-            <div className="whitespace-pre-wrap text-[14px] leading-[1.6] text-fog-100">
-              {turn.text}
-              {turn.streaming && (
-                <motion.span
-                  animate={{ opacity: [0.2, 1, 0.2] }}
-                  transition={{ duration: 1.2, repeat: Infinity }}
-                  className="ml-0.5 inline-block h-3 w-1 align-middle bg-[var(--color-indigo-primary)]"
-                />
-              )}
-            </div>
-          )}
+          {(() => {
+            const cleaned = sanitizeAssistantText(turn.text)
+            if (!cleaned) return null
+            return (
+              <div className="whitespace-pre-wrap text-[14px] leading-[1.6] text-fog-100">
+                {cleaned}
+                {turn.streaming && (
+                  <motion.span
+                    animate={{ opacity: [0.2, 1, 0.2] }}
+                    transition={{ duration: 1.2, repeat: Infinity }}
+                    className="ml-0.5 inline-block h-3 w-1 align-middle bg-[var(--color-indigo-primary)]"
+                  />
+                )}
+              </div>
+            )
+          })()}
           {sortToolsByStart(turn.tools).map((tool, i) => (
             <ToolCard
               key={tool.call_id || `tool-${i}`}
