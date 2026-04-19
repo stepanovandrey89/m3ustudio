@@ -131,15 +131,15 @@ export function Header({ duplicatesCount, theme, onToggleTheme, onReload, onShow
               )}
             <motion.div
               ref={settingsMenuRef}
-              initial={isMobile ? { opacity: 0, y: 24 } : { opacity: 0, y: -6, scale: 0.97 }}
+              initial={isMobile ? { opacity: 0, y: -24 } : { opacity: 0, y: -6, scale: 0.97 }}
               animate={isMobile ? { opacity: 1, y: 0 } : { opacity: 1, y: 0, scale: 1 }}
-              exit={isMobile ? { opacity: 0, y: 24 } : { opacity: 0, y: -6, scale: 0.97 }}
+              exit={isMobile ? { opacity: 0, y: -24 } : { opacity: 0, y: -6, scale: 0.97 }}
               transition={{ duration: 0.16 }}
               style={isMobile ? undefined : { top: settingsMenuPos.top, right: settingsMenuPos.right }}
               className={cn(
                 'fixed z-[9999] overflow-auto overscroll-contain border border-white/10 bg-[#181620] shadow-2xl',
                 isMobile
-                  ? 'inset-x-0 bottom-0 max-h-[85vh] rounded-t-2xl pb-[env(safe-area-inset-bottom)]'
+                  ? 'inset-x-0 top-0 max-h-[85vh] rounded-b-2xl pt-[env(safe-area-inset-top)]'
                   : 'w-56 rounded-xl',
               )}
             >
