@@ -245,13 +245,23 @@ export function AIAssistant({ enabled, loadingStatus, onPlan, onRecord }: AIAssi
     }
   }, [streaming, stop])
 
+  // `promptKey` lets a chip's visible label differ from the prompt actually
+  // sent to the model — so "Подбери фильмы на вечер" stays short while the
+  // underlying request asks for a 3–5 picks list. Falls back to `key` when
+  // omitted.
   const suggestions: {
     icon: typeof Trophy
     key: string
+    promptKey?: string
     mode?: 'send' | 'deep'
   }[] = [
     { icon: Trophy, key: 'ai_suggest_sport', mode: 'send' },
-    { icon: Film, key: 'ai_suggest_cinema', mode: 'send' },
+    {
+      icon: Film,
+      key: 'ai_suggest_cinema',
+      promptKey: 'ai_suggest_cinema_prompt',
+      mode: 'send',
+    },
     { icon: Wand2, key: 'ai_suggest_random', mode: 'send' },
     { icon: CalendarSearch, key: 'ai_suggest_deep', mode: 'deep' },
   ]
@@ -319,7 +329,9 @@ export function AIAssistant({ enabled, loadingStatus, onPlan, onRecord }: AIAssi
                     key={s.key}
                     type="button"
                     onClick={() =>
-                      isDeep ? askForDeepClarification() : send(t(s.key))
+                      isDeep
+                        ? askForDeepClarification()
+                        : send(t(s.promptKey ?? s.key))
                     }
                     className={cn(
                       'group relative flex items-center gap-3 overflow-hidden rounded-2xl border px-4 py-3 text-left transition',

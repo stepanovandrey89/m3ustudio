@@ -159,7 +159,9 @@ const translations: Record<Lang, Record<string, string>> = {
     'ai_thinking': 'thinking…',
     'ai_empty_epg': 'Your favorites have no EPG right now — nothing to recommend yet.',
     'ai_suggest_sport': 'Best sport tonight?',
-    'ai_suggest_cinema': 'Pick films for the evening — up to 5 options',
+    'ai_suggest_cinema': 'Pick films for the evening',
+    'ai_suggest_cinema_prompt':
+      'Recommend films airing this evening — give me 3 to 5 distinct options across different channels, not a single pick.',
     'ai_suggest_news': 'Today\'s news digest',
     'ai_suggest_random': 'Surprise me',
     'ai_suggest_deep': 'I want more',
@@ -332,7 +334,9 @@ const translations: Record<Lang, Record<string, string>> = {
     'ai_thinking': 'думаю…',
     'ai_empty_epg': 'По избранным каналам нет EPG — пока нечего советовать.',
     'ai_suggest_sport': 'Лучший спорт вечером?',
-    'ai_suggest_cinema': 'Подбери фильмы на вечер — до 5 вариантов',
+    'ai_suggest_cinema': 'Подбери фильмы на вечер',
+    'ai_suggest_cinema_prompt':
+      'Подбери фильмы на вечер — дай 3–5 разных вариантов с разных каналов, а не один.',
     'ai_suggest_news': 'Дайджест новостей за день',
     'ai_suggest_random': 'Удиви меня',
     'ai_suggest_deep': 'Хочу больше',
