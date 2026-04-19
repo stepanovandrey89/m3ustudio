@@ -38,8 +38,10 @@ export function SectionNav({ active, onChange }: SectionNavProps) {
               key={item.id}
               type="button"
               onClick={() => onChange(item.id)}
+              aria-label={t(item.labelKey)}
+              title={t(item.labelKey)}
               className={cn(
-                'relative flex flex-1 items-center justify-center gap-2 rounded-full px-3 py-2 text-[12px] font-medium tracking-tight transition-colors',
+                'relative flex flex-1 items-center justify-center gap-0 rounded-full px-2 py-2 text-[12px] font-medium tracking-tight transition-colors md:gap-2 md:px-3',
                 isActive ? 'text-white' : 'text-fog-200/70 hover:text-white',
               )}
             >
@@ -54,7 +56,7 @@ export function SectionNav({ active, onChange }: SectionNavProps) {
                 'relative h-4 w-4 transition-colors',
                 isActive ? 'text-[var(--color-indigo-primary)]' : 'opacity-70',
               )} />
-              <span className="relative">{t(item.labelKey)}</span>
+              <span className="relative hidden md:inline">{t(item.labelKey)}</span>
             </button>
           )
         })}
