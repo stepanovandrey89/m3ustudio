@@ -650,6 +650,7 @@ interface RecommendCardProps {
 }
 
 function RecommendCard({ tool, lang, onPlan, onRecord }: RecommendCardProps) {
+  const { t } = useI18n()
   const res = (tool.result ?? {}) as {
     ok?: boolean
     channel_id?: string
@@ -698,6 +699,11 @@ function RecommendCard({ tool, lang, onPlan, onRecord }: RecommendCardProps) {
       : 0
   const now = useNow(30_000)
   const countdown = start ? formatCountdown(start, now, lang) : ''
+  // Cached AI replies persist across sessions, so a card rendered yesterday
+  // can still be in the chat history when the programme already aired. Plan
+  // and Record are meaningless in that state — show a muted "aired" badge
+  // instead of live action buttons.
+  const ended = !!stop && new Date(stop).getTime() <= now
 
   return (
     <motion.div
@@ -776,31 +782,39 @@ function RecommendCard({ tool, lang, onPlan, onRecord }: RecommendCardProps) {
           )}
         </div>
         <div className="flex items-center gap-1.5">
-          {onPlan && channelId && start && stop && (
-            <PlanButton
-              onPlan={onPlan}
-              entry={{
-                channel_id: channelId,
-                title,
-                start,
-                stop,
-                poster_keywords: String(tool.args.poster_keywords ?? ''),
-                blurb,
-              }}
-            />
-          )}
-          {onRecord && channelId && start && stop && (
-            <RecordButton
-              onRecord={onRecord}
-              entry={{
-                channel_id: channelId,
-                title,
-                start,
-                stop,
-                poster_keywords: String(tool.args.poster_keywords ?? ''),
-                blurb,
-              }}
-            />
+          {ended ? (
+            <span className="inline-flex items-center rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] text-fog-200/60">
+              {t('digest_aired')}
+            </span>
+          ) : (
+            <>
+              {onPlan && channelId && start && stop && (
+                <PlanButton
+                  onPlan={onPlan}
+                  entry={{
+                    channel_id: channelId,
+                    title,
+                    start,
+                    stop,
+                    poster_keywords: String(tool.args.poster_keywords ?? ''),
+                    blurb,
+                  }}
+                />
+              )}
+              {onRecord && channelId && start && stop && (
+                <RecordButton
+                  onRecord={onRecord}
+                  entry={{
+                    channel_id: channelId,
+                    title,
+                    start,
+                    stop,
+                    poster_keywords: String(tool.args.poster_keywords ?? ''),
+                    blurb,
+                  }}
+                />
+              )}
+            </>
           )}
         </div>
       </div>
