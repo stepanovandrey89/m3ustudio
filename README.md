@@ -56,7 +56,7 @@ your machine.
 - Drop-in override: any PNG named after a channel slug takes precedence
 
 **Organisation**
-- Mirrored "Основное" group between the source file and the curated main list — edit either side and the other follows
+- Mirrored "Main" group between the source file and the curated main list — edit either side and the other follows
 - Configurable default channel order (editable via Settings) used as the bootstrap seed for fresh imports
 - Duplicate detection that groups near-identical channel names across providers
 - Import / export: upload a new `.m3u8`, download the curated one, export just the channel names as `.txt`
