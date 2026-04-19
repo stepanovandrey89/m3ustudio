@@ -8,7 +8,6 @@ import {
   Loader2,
   PlayCircle,
   RefreshCw,
-  Sparkles,
   Sunrise,
   Trophy,
   Video,
@@ -84,10 +83,12 @@ function storeCachedDigest(
   }
 }
 
+// Today highlights only two themes — sport and cinema. "Assistant" remains
+// a valid DigestTheme at the type level (used for recordings + AI chat
+// recommendations) but is no longer surfaced as a tab here.
 const THEMES: { id: DigestTheme; icon: React.ComponentType<{ className?: string }>; accent: string }[] = [
   { id: 'sport', icon: Trophy, accent: 'from-amber-400/40 to-rose-500/30' },
   { id: 'cinema', icon: Film, accent: 'from-indigo-500/40 to-violet-600/30' },
-  { id: 'assistant', icon: Sparkles, accent: 'from-sky-400/40 to-indigo-500/30' },
 ]
 
 interface DailyDigestProps {
@@ -116,16 +117,33 @@ function sweepOldCaches(): void {
   }
 }
 
+const ACTIVE_THEME_KEY = 'm3u_digest_active_theme'
+
 export function DailyDigest({ enabled, onPlan, onRecord, onWatch }: DailyDigestProps) {
   const { t, lang } = useI18n()
   sweepOldCaches()
-  const [active, setActive] = useState<DigestTheme>('sport')
+  const [active, setActive] = useState<DigestTheme>(() => {
+    try {
+      const raw = localStorage.getItem(ACTIVE_THEME_KEY)
+      if (raw === 'sport' || raw === 'cinema') return raw
+    } catch {
+      /* */
+    }
+    return 'sport'
+  })
+  useEffect(() => {
+    try {
+      localStorage.setItem(ACTIVE_THEME_KEY, active)
+    } catch {
+      /* */
+    }
+  }, [active])
   // Seed local state from the module-level cache so a remount after
   // navigating away shows the previously-fetched digests instantly.
   const [cache, setCache] = useState<Partial<Record<DigestTheme, DigestResponse>>>(
     () => {
       const initial: Partial<Record<DigestTheme, DigestResponse>> = {}
-      for (const th of ['sport', 'cinema', 'assistant'] as const) {
+      for (const th of ['sport', 'cinema'] as const) {
         const hit = loadCachedDigest(th, lang)
         if (hit) initial[th] = hit
       }
@@ -137,7 +155,7 @@ export function DailyDigest({ enabled, onPlan, onRecord, onWatch }: DailyDigestP
       // If a generation started before we mounted and is still running, show
       // the spinner on remount too.
       const initial: Partial<Record<DigestTheme, boolean>> = {}
-      for (const th of ['sport', 'cinema', 'assistant'] as const) {
+      for (const th of ['sport', 'cinema'] as const) {
         if (digestInflight.has(cacheKey(th, lang))) initial[th] = true
       }
       return initial
@@ -198,7 +216,7 @@ export function DailyDigest({ enabled, onPlan, onRecord, onWatch }: DailyDigestP
     if (prevLangRef.current === lang) return
     prevLangRef.current = lang
     const next: Partial<Record<DigestTheme, DigestResponse>> = {}
-    for (const th of ['sport', 'cinema', 'assistant'] as const) {
+    for (const th of ['sport', 'cinema'] as const) {
       const hit = loadCachedDigest(th, lang)
       if (hit) next[th] = hit
     }
