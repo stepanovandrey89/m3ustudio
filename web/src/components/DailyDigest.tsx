@@ -14,10 +14,11 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../lib/api'
-import { useI18n } from '../lib/i18n'
+import { useI18n, type Lang } from '../lib/i18n'
 import { useNow, formatCountdown } from '../hooks/useNow'
 import { usePoster } from '../hooks/usePoster'
 import { cn } from '../lib/cn'
+import { notify } from '../lib/toast'
 import type { DigestEntry, DigestResponse, DigestTheme } from '../types'
 
 function formatGeneratedAt(
@@ -119,6 +120,46 @@ function sweepOldCaches(): void {
 
 const ACTIVE_THEME_KEY = 'm3u_digest_active_theme'
 
+function themeI18nKey(theme: DigestTheme): string {
+  return theme === 'sport' ? 'digest_theme_sport' : 'digest_theme_cinema'
+}
+
+function notifyDigestReady(
+  theme: DigestTheme,
+  _lang: Lang,
+  t: (key: string) => string,
+): void {
+  notify({
+    title: t('digest_ready'),
+    description: t(themeI18nKey(theme)),
+    action: {
+      label: t('digest_ready_open'),
+      onClick: () => {
+        try {
+          localStorage.setItem(ACTIVE_THEME_KEY, theme)
+        } catch {
+          /* */
+        }
+        window.dispatchEvent(
+          new CustomEvent('m3u:goto-today', { detail: { theme } }),
+        )
+      },
+    },
+  })
+}
+
+function notifyDigestFailed(
+  theme: DigestTheme,
+  _lang: Lang,
+  t: (key: string) => string,
+): void {
+  notify({
+    title: t('digest_failed'),
+    description: t(themeI18nKey(theme)),
+    tone: 'error',
+  })
+}
+
 export function DailyDigest({ enabled, onPlan, onRecord, onWatch }: DailyDigestProps) {
   const { t, lang } = useI18n()
   sweepOldCaches()
@@ -176,9 +217,16 @@ export function DailyDigest({ enabled, onPlan, onRecord, onWatch }: DailyDigestP
       if (!promise) {
         promise = api.getDigest(theme, lang, refresh)
         digestInflight.set(key, promise)
+        // Chain notifications on the module-level promise so a toast fires
+        // even if the user navigates away from this panel before completion.
         promise
-          .then((res) => storeCachedDigest(theme, lang, res))
-          .catch(() => {})
+          .then((res) => {
+            storeCachedDigest(theme, lang, res)
+            if (refresh) notifyDigestReady(theme, lang, t)
+          })
+          .catch(() => {
+            if (refresh) notifyDigestFailed(theme, lang, t)
+          })
           .finally(() => {
             if (digestInflight.get(key) === promise) digestInflight.delete(key)
           })
@@ -195,7 +243,7 @@ export function DailyDigest({ enabled, onPlan, onRecord, onWatch }: DailyDigestP
         setLoading((l) => ({ ...l, [theme]: false }))
       }
     },
-    [enabled, lang],
+    [enabled, lang, t],
   )
 
   useEffect(() => {

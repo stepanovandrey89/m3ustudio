@@ -24,6 +24,7 @@ import { PlansPanel } from './components/PlansPanel'
 import { PlayerModal, type PreviewContext } from './components/PlayerModal'
 import { SectionNav, type Section } from './components/SectionNav'
 import { SourcePanel } from './components/SourcePanel'
+import { ToastHost } from './components/ToastHost'
 import {
   useDuplicates,
   useLogoWarming,
@@ -114,6 +115,14 @@ function App() {
   useEffect(() => {
     try { localStorage.setItem('m3u_section_v1', section) } catch { /* */ }
   }, [section])
+
+  // Toast "Open" action dispatches this event so it works regardless of
+  // which section the user is currently on.
+  useEffect(() => {
+    const handler = () => setSection('today')
+    window.addEventListener('m3u:goto-today', handler)
+    return () => window.removeEventListener('m3u:goto-today', handler)
+  }, [])
 
   const [aiEnabled, setAiEnabled] = useState<boolean | null>(null)
   useEffect(() => {
@@ -680,6 +689,7 @@ function App() {
           />
         )}
       </AnimatePresence>
+      <ToastHost />
     </div>
     </>
   )
