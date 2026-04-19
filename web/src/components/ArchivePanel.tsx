@@ -60,11 +60,7 @@ function formatDuration(totalSeconds: number): string {
   return `${m}:${String(s).padStart(2, '0')}`
 }
 
-interface ArchivePanelProps {
-  onWatchLive?: (channelId: string) => void
-}
-
-export function ArchivePanel({ onWatchLive }: ArchivePanelProps = {}) {
+export function ArchivePanel() {
   const { t, lang } = useI18n()
   const [items, setItems] = useState<Recording[]>([])
   const [loading, setLoading] = useState(true)
@@ -245,7 +241,6 @@ export function ArchivePanel({ onWatchLive }: ArchivePanelProps = {}) {
               rec={rec}
               index={i}
               onPlay={() => setPlaying(rec)}
-              onWatchLive={() => onWatchLive?.(rec.channel_id)}
               onDelete={() => handleDelete(rec)}
               onCancel={() => handleCancel(rec)}
               onPause={() => handlePause(rec)}
@@ -273,7 +268,6 @@ function RecordingCard({
   rec,
   index,
   onPlay,
-  onWatchLive,
   onDelete,
   onCancel,
   onPause,
@@ -282,7 +276,6 @@ function RecordingCard({
   rec: Recording
   index: number
   onPlay: () => void
-  onWatchLive: () => void
   onDelete: () => void
   onCancel: () => void
   onPause: () => void
@@ -374,17 +367,17 @@ function RecordingCard({
             )}
             {rec.status === 'running' && (
               <>
-                {/* Watching the live channel while it's being recorded is a
-                    separate HLS session and doesn't interfere with the
-                    server-side ffmpeg capture — keep the Watch button
-                    available so a click on Pause isn't required first. */}
+                {/* Play what's on disk right now — the MKV ffmpeg is writing
+                    into. Browser reads whatever bytes are present at fetch
+                    time (growing-file playback), so the user sees the
+                    recording-in-progress, not a live stream. */}
                 <button
                   type="button"
-                  onClick={onWatchLive}
+                  onClick={onPlay}
                   className="flex items-center gap-1.5 rounded-full bg-[var(--color-rose-primary)] px-3 py-1.5 text-[12px] font-medium text-white transition hover:brightness-110"
                 >
                   <PlayCircle className="h-3.5 w-3.5" />
-                  {t('digest_watch_now')}
+                  {t('archive_play')}
                 </button>
                 <button
                   type="button"
