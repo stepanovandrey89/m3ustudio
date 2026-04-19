@@ -191,15 +191,22 @@ class PlanStore:
         return out
 
     def mark_missed_stale(self, now: datetime) -> int:
-        """Flag plans whose stop is in the past and never got a live alert."""
+        """Flag stale plans based on stop time.
+
+        * `scheduled` and already past stop → `missed` (live alert never fired)
+        * `live_notified` and past stop → `done` (aired successfully)
+        Other statuses are left alone.
+        """
         count = 0
         for p in list(self._plans.values()):
-            if p.status not in ("scheduled",):
+            if p.status not in ("scheduled", "live_notified"):
                 continue
             stop = _parse_iso(p.stop)
-            if stop and stop < now:
-                self._plans[p.id] = replace(p, status="missed")
-                count += 1
+            if not stop or stop >= now:
+                continue
+            next_status = "done" if p.status == "live_notified" else "missed"
+            self._plans[p.id] = replace(p, status=next_status)
+            count += 1
         if count:
             self._save()
         return count
