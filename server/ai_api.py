@@ -6,10 +6,14 @@ Keeps the AI/recording surface out of main.py so it stays approachable.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import date, datetime
+from pathlib import Path
 from typing import Any
+from urllib.parse import quote, urlparse
 
+import httpx
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
@@ -136,16 +140,70 @@ def build_router(state: Any) -> APIRouter:  # noqa: ANN401 — state is the main
         fallback: str = Query(default=""),
     ) -> JSONResponse:
         """Resolve a poster for keywords; if that fails, try the optional
-        fallback (usually the original programme title). Two-stage lookup
-        covers esoteric cases where the model-generated English keywords
-        don't hit TMDB but the native-language title does via Wikipedia.
+        fallback. Returned URL points at our local image proxy so the browser
+        never talks to TMDB/Wikipedia directly — avoids the half-dozen CORS /
+        CSP / referrer issues that caused some cards to silently skip the
+        image.
         """
         hit = await posters.resolve(keywords, lang)
         if hit is None and fallback and fallback.strip() != keywords.strip():
             hit = await posters.resolve(fallback, lang)
         if hit is None:
             return JSONResponse({"url": None, "source": "none"})
-        return JSONResponse(hit.to_dict())
+        proxied = f"/api/ai/poster-image?src={quote(hit.url, safe='')}"
+        return JSONResponse({"url": proxied, "source": hit.source})
+
+    @router.get("/ai/poster-image")
+    async def poster_image(src: str = Query(..., min_length=8)) -> FileResponse:
+        """Download-and-cache TMDB / Wikipedia images locally.
+
+        Only the two trusted CDNs are allowed — we won't become an open proxy
+        for arbitrary URLs. Cached files are keyed by sha1 of the full source
+        URL; extension is preserved where possible so browsers send the right
+        Accept.
+        """
+        allowed_hosts = {
+            "image.tmdb.org",
+            "upload.wikimedia.org",
+            "commons.wikimedia.org",
+        }
+        parsed = urlparse(src)
+        if parsed.scheme != "https" or parsed.hostname not in allowed_hosts:
+            raise HTTPException(400, "image source not allowed")
+
+        img_dir: Path = state.posters.root / "posters_img"
+        img_dir.mkdir(parents=True, exist_ok=True)
+        digest = hashlib.sha1(src.encode("utf-8")).hexdigest()
+        ext = Path(parsed.path).suffix.lower() or ".jpg"
+        if ext not in (".jpg", ".jpeg", ".png", ".webp", ".gif"):
+            ext = ".jpg"
+        cache_path = img_dir / f"{digest}{ext}"
+
+        if not cache_path.exists():
+            try:
+                async with httpx.AsyncClient(
+                    timeout=10.0,
+                    follow_redirects=True,
+                    headers={"User-Agent": "m3u-studio/0.7 (poster-proxy)"},
+                ) as client:
+                    resp = await client.get(src)
+                    resp.raise_for_status()
+                    cache_path.write_bytes(resp.content)
+            except httpx.HTTPError as exc:
+                raise HTTPException(502, f"upstream fetch failed: {exc}") from exc
+
+        media_map = {
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".png": "image/png",
+            ".webp": "image/webp",
+            ".gif": "image/gif",
+        }
+        return FileResponse(
+            cache_path,
+            media_type=media_map.get(ext, "image/jpeg"),
+            headers={"Cache-Control": "public, max-age=604800"},
+        )
 
     # ------------- Chat (SSE) --------------------------------------------
 

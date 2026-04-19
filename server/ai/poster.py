@@ -49,6 +49,10 @@ class PosterResolver:
         self._lock = asyncio.Lock()
         self._tmdb_key = os.environ.get("TMDB_API_KEY", "").strip()
 
+    @property
+    def root(self) -> Path:
+        return self._cache_dir
+
     def _load(self) -> dict[str, tuple[float, PosterHit | None]]:
         if not self._file.exists():
             return {}
