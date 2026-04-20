@@ -117,13 +117,20 @@ def build_router(state: Any) -> APIRouter:  # noqa: ANN401 — state is the main
                 return JSONResponse({"cached": True, **cached.to_dict()})
 
         main_channels = _main_channels(state)
-        # Cinema: drop news-heavy generalist channels whose "cinema" slots
-        # are Soviet tele-theatre, talk-shows, and biographical filler.
+        # Cinema: feature films only. Drop channels whose ORIGINAL group
+        # is Sport/News/Kids/Music — their "cinema"-ish slots are mostly
+        # talk-shows, biographies and broadcasts, not real films. Also
+        # hard-exclude generalist news-heavy channels that stay in the
+        # "Основное" group (ТВЦ/НТВ).
         if theme_typed == "cinema":
+            og = state.store.original_groups_map()
+            excluded_groups = {"Спорт", "Новости", "Детские", "Музыка"}
+            excluded_name_fragments = ("твц", "нтв")
             main_channels = [
                 ch
                 for ch in main_channels
-                if not any(needle in ch.name.lower() for needle in ("твц", "нтв"))
+                if og.get(ch.id, "") not in excluded_groups
+                and not any(n in ch.name.lower() for n in excluded_name_fragments)
             ]
         schedules = build_main_schedule(
             state.epg,
@@ -657,8 +664,9 @@ _THEME_KEYWORDS: dict[str, list[str]] = {
         "трансляц",
     ],
     "cinema": [
+        # Feature films only — series keywords intentionally excluded so
+        # multi-episode shows don't drown out real cinema picks.
         "фильм",
-        "сериал",
         "кино",
         "художествен",
         "драма",
@@ -678,8 +686,6 @@ _THEME_KEYWORDS: dict[str, list[str]] = {
         "премьера",
         "film",
         "movie",
-        "tv series",
-        "series",
         "drama",
         "comedy",
         "thriller",

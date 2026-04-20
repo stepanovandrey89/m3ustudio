@@ -70,18 +70,25 @@ async def generate_digest(
 
     now_iso = datetime.now(UTC).isoformat()
     taste_ru = (
-        "Приоритет: НОВИНКИ (2022+), громкие премьеры, культовые хиты 90-х "
-        "(Тарантино, Скорсезе, Бессон, отечественная классика). Избегай "
-        "бесконечных советских телеспектаклей, ток-шоу под видом кино, "
-        "документалок о поэтах, ремейков-пустышек, скучных сериалов-многосерийников.\n"
+        "ТОЛЬКО ПОЛНОМЕТРАЖНЫЕ ФИЛЬМЫ. Запрещено: сериалы, многосерийные фильмы, "
+        "телеспектакли, ток-шоу, документалки-биографии, «истории создания», "
+        "рубрики вроде «10 самых», спортивные трансляции.\n"
+        "Приоритет: НОВИНКИ (2022+), громкие премьеры 2020-х, культовые хиты "
+        "90-х–2000-х (Тарантино, Скорсезе, Бессон, Финчер, Нолан, Джеймс "
+        "Кэмерон, «Крёстный отец», «Брат», «Форрест Гамп», «Матрица», «Бойцовский "
+        "клуб», «Терминатор»). Любимые всеми кассовые хиты лучше, чем полузабытые "
+        "B-movies на СТС-Кино.\n"
         if theme == "cinema"
         else ""
     )
     taste_en = (
-        "Prefer: NEW releases (2022+), big premieres, iconic 90s hits "
-        "(Tarantino, Scorsese, Besson, cult classics). Avoid endless Soviet "
-        "TV-theatre, talk-shows disguised as cinema, biography documentaries, "
-        "forgettable remakes, plodding long-running serials.\n"
+        "FEATURE FILMS ONLY. Forbidden: TV series, mini-series, tele-plays, "
+        "talk-shows, biographical documentaries, behind-the-scenes shows, "
+        'listicle formats ("top 10 …"), sports broadcasts.\n'
+        "Prefer: NEW releases (2022+), big 2020s premieres, cult hits from "
+        "the 90s–2000s (Tarantino, Scorsese, Besson, Fincher, Nolan, Cameron, "
+        "Godfather, Fight Club, Matrix, Terminator). Beloved box-office hits "
+        "beat obscure B-movies.\n"
         if theme == "cinema"
         else ""
     )
