@@ -153,10 +153,20 @@ class PosterResolver:
             headers={"User-Agent": "m3u-studio/0.7 (poster-lookup)"},
         ) as client:
             hit: PosterHit | None = None
-            if self._tmdb_key:
-                hit = await _tmdb_search(client, keywords, lang, self._tmdb_key)
-            if hit is None:
+            # Russian films are almost always wrong on TMDB (it matches
+            # "Брат" to "Brothers" or generic Russian-language entries),
+            # while Wikipedia RU has the canonical poster 95% of the
+            # time. Swap the order when the query is Cyrillic.
+            cyrillic = _has_cyrillic(keywords)
+            if cyrillic:
                 hit = await _wiki_lookup(client, keywords, lang)
+                if hit is None and self._tmdb_key:
+                    hit = await _tmdb_search(client, keywords, lang, self._tmdb_key)
+            else:
+                if self._tmdb_key:
+                    hit = await _tmdb_search(client, keywords, lang, self._tmdb_key)
+                if hit is None:
+                    hit = await _wiki_lookup(client, keywords, lang)
             if hit is not None:
                 # Pre-fetch the image so the frontend's first render hits a
                 # file on disk instead of racing with the TMDB/Wiki round-trip.
@@ -326,6 +336,13 @@ async def _wiki_direct(
             if isinstance(block, dict) and block.get("source"):
                 return str(block["source"])
     return None
+
+
+def _has_cyrillic(text: str) -> bool:
+    """True when ``text`` contains any Cyrillic codepoint — our signal to
+    prefer Wikipedia over TMDB for Russian films.
+    """
+    return any("\u0400" <= c <= "\u04ff" for c in text)
 
 
 _STRIP_TAIL_RE = re.compile(

@@ -507,8 +507,18 @@ async def _resolve_poster_for_title(
     """
     title_clean = (title or "").strip()
     latin_hint = (poster_keywords or "").strip()
-    primary = latin_hint if latin_hint else title_clean
-    fallback = title_clean if latin_hint and latin_hint.lower() != title_clean.lower() else ""
+    # Russian films live on Wikipedia RU — querying by the Cyrillic title
+    # lands on the canonical article and its official poster. TMDB
+    # guesses Brad Pitt "Brothers" for "Брат" etc. So when the title is
+    # Cyrillic put it first; Latin hint stays as a fallback for global
+    # titles that only TMDB knows well.
+    cyrillic_title = any("\u0400" <= c <= "\u04ff" for c in title_clean)
+    if cyrillic_title:
+        primary = title_clean
+        fallback = latin_hint if latin_hint and latin_hint.lower() != title_clean.lower() else ""
+    else:
+        primary = latin_hint if latin_hint else title_clean
+        fallback = title_clean if latin_hint and latin_hint.lower() != title_clean.lower() else ""
     try:
         hit = None
         if primary:
@@ -751,12 +761,21 @@ async def _hydrate_digest_posters(
         )
 
     hydrated = await asyncio.gather(*(_resolve(i) for i in digest.items))
+
+    # Sort by start time — nearest first. The prompt asks for this order
+    # but gpt-4o-mini occasionally returns items in arrival/channel order,
+    # so enforce it server-side. Falls back gracefully for items missing
+    # a valid ISO timestamp.
+    def _start_key(entry: DigestEntry) -> str:
+        return entry.start or "9999"
+
+    hydrated_sorted = sorted(hydrated, key=_start_key)
     return Digest(
         date=digest.date,
         theme=digest.theme,
         lang=digest.lang,
         generated_at=digest.generated_at,
-        items=tuple(hydrated),
+        items=tuple(hydrated_sorted),
     )
 
 
