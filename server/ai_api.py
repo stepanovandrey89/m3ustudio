@@ -443,23 +443,36 @@ async def _resolve_poster_for_title(
     poster_keywords: str,
     lang: str,
 ) -> str:
-    """Resolve a poster URL preferring the full programme title.
+    """Resolve a poster URL for a programme.
 
-    Short keyword-only queries (``"Смерч"``) collide with every film that
-    happens to share a word, so the full EPG title is always tried first and
-    the Latin ``poster_keywords`` hint only steps in when that misses.
+    TMDB and Wikipedia canonical titles are almost always Latin-script, while
+    EPG feed titles are Russian pirate/dub translations that rarely match
+    exactly ("Остин Пауэрс: Похитители времени" vs TMDB's "Austin Powers: The
+    Spy Who Shagged Me"). We therefore try the model's Latin
+    ``poster_keywords`` hint FIRST when it is present and distinct from the
+    title, and only fall back to the raw Cyrillic title if the Latin query
+    turned up nothing. For English-language UI the order is identical.
     Returns an empty string on any failure so callers can just plug it in.
     """
-    primary = (title or "").strip()
-    fallback = (poster_keywords or "").strip()
+    title_clean = (title or "").strip()
+    latin_hint = (poster_keywords or "").strip()
+    primary = latin_hint if latin_hint else title_clean
+    fallback = title_clean if latin_hint and latin_hint.lower() != title_clean.lower() else ""
     try:
         hit = None
         if primary:
             hit = await posters.resolve(primary, lang)
-        if hit is None and fallback and fallback.lower() != primary.lower():
+        if hit is None and fallback:
             hit = await posters.resolve(fallback, lang)
-        return hit.url if hit else ""
-    except Exception:  # noqa: BLE001 — poster is cosmetic
+        url = hit.url if hit else ""
+        print(
+            f"[poster] title='{title_clean[:60]}' hint='{latin_hint[:60]}' "
+            f"-> {'OK' if url else 'MISS'}",
+            flush=True,
+        )
+        return url
+    except Exception as exc:  # noqa: BLE001 — poster is cosmetic
+        print(f"[poster] error for '{title_clean[:60]}': {exc}", flush=True)
         return ""
 
 
