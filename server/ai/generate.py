@@ -69,21 +69,51 @@ async def generate_digest(
     }[theme]
 
     now_iso = datetime.now(UTC).isoformat()
+    taste_ru = (
+        "Приоритет: НОВИНКИ (2022+), громкие премьеры, культовые хиты 90-х "
+        "(Тарантино, Скорсезе, Бессон, отечественная классика). Избегай "
+        "бесконечных советских телеспектаклей, ток-шоу под видом кино, "
+        "документалок о поэтах, ремейков-пустышек, скучных сериалов-многосерийников.\n"
+        if theme == "cinema"
+        else ""
+    )
+    taste_en = (
+        "Prefer: NEW releases (2022+), big premieres, iconic 90s hits "
+        "(Tarantino, Scorsese, Besson, cult classics). Avoid endless Soviet "
+        "TV-theatre, talk-shows disguised as cinema, biography documentaries, "
+        "forgettable remakes, plodding long-running serials.\n"
+        if theme == "cinema"
+        else ""
+    )
+    count_ru = (
+        "ОБЯЗАТЕЛЬНО верни 9 пунктов. Если 9 одинаково хороших не набирается — "
+        "всё равно верни 9, добавив следующее лучшее. Пустой список только "
+        "когда в EPG реально ничего по теме нет.\n"
+    )
+    count_en = (
+        "MUST return 9 items. If 9 equally strong picks aren't available — "
+        "still return 9 by picking the next-best. Empty list only when the "
+        "EPG genuinely has nothing on-theme.\n"
+    )
     user_prompt = (
         (
             f"Тема: {theme_label}\n"
             f"Сегодня: {date.today().isoformat()} · СЕЙЧАС (UTC): {now_iso}\n"
             "Всё, что ниже — предстоящий эфир (старт минимум через 10 мин, "
-            "максимум через 12 часов). Не пиши, что передача «шла» или «прошла».\n\n"
-            f"EPG избранных каналов:\n{epg_text}\n"
+            "максимум через 12 часов). Не пиши, что передача «шла» или «прошла».\n"
+            f"{count_ru}"
+            f"{taste_ru}"
+            f"\nEPG избранных каналов:\n{epg_text}\n"
         )
         if lang == "ru"
         else (
             f"Theme: {theme_label}\n"
             f"Today: {date.today().isoformat()} · NOW (UTC): {now_iso}\n"
             "Everything below is upcoming (starts in 10 min to 12 h). "
-            "Never say a show was on or aired earlier.\n\n"
-            f"Favorite channels EPG:\n{epg_text}\n"
+            "Never say a show was on or aired earlier.\n"
+            f"{count_en}"
+            f"{taste_en}"
+            f"\nFavorite channels EPG:\n{epg_text}\n"
         )
     )
 
@@ -124,7 +154,7 @@ async def generate_digest(
         theme=theme,
         lang=lang,
         generated_at=datetime.now(UTC).isoformat(),
-        items=items[:10],
+        items=items[:9],
     )
 
 

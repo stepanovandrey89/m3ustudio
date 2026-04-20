@@ -75,6 +75,9 @@ export interface DigestEntry {
   stop: string
   blurb: string
   poster_keywords: string
+  /** Pre-resolved proxy URL set by the server so the card renders instantly
+   * without a separate `/api/ai/poster` round-trip. Empty string = no poster. */
+  poster_url?: string
 }
 
 export interface DigestResponse {

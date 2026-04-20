@@ -24,6 +24,7 @@ class DigestEntry:
     stop: str
     blurb: str
     poster_keywords: str
+    poster_url: str = ""
 
     def to_dict(self) -> dict[str, str]:
         return {
@@ -34,6 +35,7 @@ class DigestEntry:
             "stop": self.stop,
             "blurb": self.blurb,
             "poster_keywords": self.poster_keywords,
+            "poster_url": self.poster_url,
         }
 
 
@@ -65,6 +67,7 @@ def digest_from_dict(data: dict) -> Digest:
             stop=str(i.get("stop", "")),
             blurb=str(i.get("blurb", "")),
             poster_keywords=str(i.get("poster_keywords", "")),
+            poster_url=str(i.get("poster_url", "")),
         )
         for i in data.get("items", [])
     )

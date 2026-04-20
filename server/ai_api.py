@@ -6,6 +6,7 @@ Keeps the AI/recording surface out of main.py so it stays approachable.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 from datetime import date, datetime
@@ -116,6 +117,14 @@ def build_router(state: Any) -> APIRouter:  # noqa: ANN401 — state is the main
                 return JSONResponse({"cached": True, **cached.to_dict()})
 
         main_channels = _main_channels(state)
+        # Cinema: drop news-heavy generalist channels whose "cinema" slots
+        # are Soviet tele-theatre, talk-shows, and biographical filler.
+        if theme_typed == "cinema":
+            main_channels = [
+                ch
+                for ch in main_channels
+                if not any(needle in ch.name.lower() for needle in ("твц", "нтв"))
+            ]
         schedules = build_main_schedule(
             state.epg,
             main_channels,
@@ -134,6 +143,10 @@ def build_router(state: Any) -> APIRouter:  # noqa: ANN401 — state is the main
             if narrowed:
                 schedules = narrowed
         result = await generate_digest(client, cfg, schedules, theme_typed, lang)
+        # Resolve every poster in parallel BEFORE responding / caching so
+        # the frontend never renders a "blank card → flash of content"
+        # when the browser plays catch-up on /api/ai/poster requests.
+        result = await _hydrate_digest_posters(result, state.posters, lang)
         # Don't persist empty digests — a transient model glitch would otherwise
         # freeze an "empty" result on disk for the rest of the day, and the
         # frontend would keep serving it until the user hits refresh or the
@@ -587,26 +600,137 @@ async def _tool_recommend(
 
 _THEME_KEYWORDS: dict[str, list[str]] = {
     "sport": [
-        "футбол", "хоккей", "баскетбол", "теннис", "волейбол", "бокс",
-        "единоборств", "регби", "лыжн", "биатлон", "гольф", "велоспорт",
-        "формула", "гонк", "мото", "наскар", "ралли", "снукер", "дартс",
-        "матч", "чемпионат", "кубок", "евролиг", "еврокубок", "премьер-лига",
-        "лига чемпион", "лига европ", "нба", "nba", "nhl", "кхл", "рпл",
-        "ufc", "mma", "wta", "atp", "бой ",
-        "football", "hockey", "basketball", "tennis", "soccer", "boxing",
-        "formula 1", "formula 2", "motogp", "premier league", "champions league",
-        "euroleague", "nascar", "grand prix", "world cup", "derby", "снооkер",
+        "футбол",
+        "хоккей",
+        "баскетбол",
+        "теннис",
+        "волейбол",
+        "бокс",
+        "единоборств",
+        "регби",
+        "лыжн",
+        "биатлон",
+        "гольф",
+        "велоспорт",
+        "формула",
+        "гонк",
+        "мото",
+        "наскар",
+        "ралли",
+        "снукер",
+        "дартс",
+        "матч",
+        "чемпионат",
+        "кубок",
+        "евролиг",
+        "еврокубок",
+        "премьер-лига",
+        "лига чемпион",
+        "лига европ",
+        "нба",
+        "nba",
+        "nhl",
+        "кхл",
+        "рпл",
+        "ufc",
+        "mma",
+        "wta",
+        "atp",
+        "бой ",
+        "football",
+        "hockey",
+        "basketball",
+        "tennis",
+        "soccer",
+        "boxing",
+        "formula 1",
+        "formula 2",
+        "motogp",
+        "premier league",
+        "champions league",
+        "euroleague",
+        "nascar",
+        "grand prix",
+        "world cup",
+        "derby",
+        "снооkер",
         "трансляц",
     ],
     "cinema": [
-        "фильм", "сериал", "кино", "художествен", "драма", "комедия",
-        "боевик", "триллер", "детектив", "мелодрам", "фантастика",
-        "приключени", "вестерн", "ужасы", "хоррор", "нуар", "анимаци",
-        "мультфильм", "премьера",
-        "film", "movie", "tv series", "series", "drama", "comedy",
-        "thriller", "action", "horror", "sci-fi", "animated", "premiere",
+        "фильм",
+        "сериал",
+        "кино",
+        "художествен",
+        "драма",
+        "комедия",
+        "боевик",
+        "триллер",
+        "детектив",
+        "мелодрам",
+        "фантастика",
+        "приключени",
+        "вестерн",
+        "ужасы",
+        "хоррор",
+        "нуар",
+        "анимаци",
+        "мультфильм",
+        "премьера",
+        "film",
+        "movie",
+        "tv series",
+        "series",
+        "drama",
+        "comedy",
+        "thriller",
+        "action",
+        "horror",
+        "sci-fi",
+        "animated",
+        "premiere",
     ],
 }
+
+
+async def _hydrate_digest_posters(
+    digest: Any,  # noqa: ANN401
+    posters: PosterResolver,
+    lang: str,
+) -> Any:  # noqa: ANN401
+    """Resolve poster URLs for every digest entry in parallel.
+
+    Runs AFTER the model picks items but BEFORE we return the JSON so the
+    client receives fully-formed cards with ``poster_url`` populated. Hits
+    the TMDB / Wikipedia cache so repeated requests for the same title
+    cost nothing. Failures silently fall through to ``""`` — a blank
+    poster is better than a failed card.
+    """
+    from server.ai.digest import Digest, DigestEntry  # local import
+
+    if not digest.items:
+        return digest
+
+    async def _resolve(entry: DigestEntry) -> DigestEntry:
+        url = await _resolve_poster_for_title(posters, entry.title, entry.poster_keywords, lang)
+        return DigestEntry(
+            channel_id=entry.channel_id,
+            channel_name=entry.channel_name,
+            title=entry.title,
+            start=entry.start,
+            stop=entry.stop,
+            blurb=entry.blurb,
+            poster_keywords=entry.poster_keywords,
+            poster_url=url,
+        )
+
+    hydrated = await asyncio.gather(*(_resolve(i) for i in digest.items))
+    return Digest(
+        date=digest.date,
+        theme=digest.theme,
+        lang=digest.lang,
+        generated_at=digest.generated_at,
+        items=tuple(hydrated),
+    )
 
 
 def _narrow_by_keywords(schedules: list, keywords: list[str]) -> list:

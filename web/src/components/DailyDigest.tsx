@@ -444,12 +444,15 @@ function DigestCard({
   })
   const durMin = Math.max(1, Math.round((stop.getTime() - start.getTime()) / 60000))
   const isFeatured = index === 0
-  // Poster lookup prefers the full EPG title — a truncated one-word keyword
-  // like "Смерч" matches any film that shares the token on TMDB/Wiki and
-  // returns the wrong poster. The Latin ``poster_keywords`` hint is kept as
-  // a fallback for cases where the full title draws a blank.
-  const poster = usePoster(entry.title, lang, entry.poster_keywords || '')
-  const posterUrl = poster?.url ?? null
+  // Server pre-resolves and embeds poster_url so the card renders on first
+  // paint without an extra /api/ai/poster round-trip. usePoster stays as a
+  // graceful fallback for older cached digests that predate this field.
+  const poster = usePoster(
+    entry.poster_url ? '' : entry.title,
+    lang,
+    entry.poster_url ? '' : entry.poster_keywords || '',
+  )
+  const posterUrl = entry.poster_url || poster?.url || null
   const now = useNow(30_000)
   const countdown = formatCountdown(entry.start, now, lang)
   // Programme phase drives which actions the card offers:
