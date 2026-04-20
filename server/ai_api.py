@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -170,6 +171,15 @@ def build_router(state: Any) -> APIRouter:  # noqa: ANN401 — state is the main
             narrowed = _narrow_by_keywords(schedules, theme_keywords)
             if narrowed:
                 schedules = narrowed
+        if theme_typed == "cinema":
+            # Belt-and-braces: strip series episodes and sport broadcasts
+            # that the positive keyword filter let through. Combined with
+            # the poster-mandatory step in _hydrate_digest_posters this
+            # produces feature-films-only output even when gpt-4o-mini
+            # misbehaves.
+            cinema_clean = _exclude_non_cinema(schedules)
+            if cinema_clean:
+                schedules = cinema_clean
         result = await generate_digest(client, cfg, schedules, theme_typed, lang)
         # Resolve every poster in parallel BEFORE responding / caching so
         # the frontend never renders a "blank card → flash of content"
