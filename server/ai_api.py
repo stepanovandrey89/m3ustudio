@@ -773,13 +773,18 @@ async def _hydrate_digest_posters(
     theme = digest.theme
 
     async def _resolve(entry: DigestEntry) -> DigestEntry:
-        url = await _resolve_poster_for_title(posters, entry.title, entry.poster_keywords, lang)
-        # Sport events (Bayern vs Borussia, NHL games) almost never have a
-        # specific poster on TMDB/Wiki. Falling back to the channel logo
-        # keeps every sport tile visually populated without faking an
-        # unrelated poster.
-        if not url and theme == "sport" and entry.channel_id:
-            url = f"/api/logo/{entry.channel_id}"
+        # Sport: specific matches / races / championships are never in
+        # TMDB/Wiki — searching "Swimming Russia Cup" on TMDB matches
+        # figure-skating results and hands us a Hollywood figure-skater's
+        # poster. Skip the external lookup entirely for sport and go
+        # straight to the channel logo so the tile shows the broadcaster's
+        # recognisable brand.
+        if theme == "sport":
+            url = f"/api/logo/{entry.channel_id}" if entry.channel_id else ""
+        else:
+            url = await _resolve_poster_for_title(
+                posters, entry.title, entry.poster_keywords, lang
+            )
         return DigestEntry(
             channel_id=entry.channel_id,
             channel_name=entry.channel_name,

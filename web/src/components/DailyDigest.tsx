@@ -47,7 +47,11 @@ const digestInflight = new Map<string, Promise<DigestResponse>>()
 // carry clean hex. v1 localStorage entries contained malformed ids like
 // '(id=hex)' that broke /api/logo URLs on render. Old keys get wiped on
 // mount so reloads come back clean.
-const CACHE_STORAGE_PREFIX = 'm3u_digest_v2:'
+// Bump the prefix version whenever the server's Digest schema changes
+// (new required field, strict quality rules, etc). Old browser caches
+// won't match the new key and will be ignored — the user gets fresh
+// data automatically without needing a hard refresh.
+const CACHE_STORAGE_PREFIX = 'm3u_digest_v3:'
 const OLD_CACHE_PREFIXES = ['m3u_digest_v1:']
 
 function cacheKey(theme: DigestTheme, lang: string): string {

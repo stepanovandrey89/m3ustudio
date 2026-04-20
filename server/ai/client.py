@@ -33,7 +33,7 @@ class AIConfig:
         # longer than Cloudflare's 100s edge timeout can tolerate on Free.
         # Falls back to gpt-4o-mini, overridable via env.
         digest_model = (
-            os.environ.get("OPENAI_DIGEST_MODEL", "gpt-4.1-mini").strip() or "gpt-4.1-mini"
+            os.environ.get("OPENAI_DIGEST_MODEL", "gpt-4.1").strip() or "gpt-4.1"
         )
         return cls(api_key=key, model=model, digest_model=digest_model, enabled=bool(key))
 
