@@ -116,11 +116,16 @@ def build_router(state: Any) -> APIRouter:  # noqa: ANN401 — state is the main
                 return JSONResponse({"cached": True, **cached.to_dict()})
 
         main_channels = _main_channels(state)
+        # Tight digest window: 149 channels × 6 programmes × 8h keeps the
+        # OpenAI input well under Cloudflare's 100s Free-plan edge timeout.
+        # Previously used 12h × max(12,future_hours) which blew past CF for
+        # reasoning models that spend ~40-60s "thinking" on a fat prompt.
         schedules = build_main_schedule(
             state.epg,
             main_channels,
             past_hours=0,
-            future_hours=12,
+            future_hours=8,
+            max_per_channel=6,
             only_upcoming=True,
         )
         result = await generate_digest(client, cfg, schedules, theme_typed, lang)
