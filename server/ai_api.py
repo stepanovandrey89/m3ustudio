@@ -219,10 +219,13 @@ def build_router(state: Any) -> APIRouter:  # noqa: ANN401 — state is the main
             raise HTTPException(503, "OPENAI_API_KEY is not configured")
 
         main_channels = _main_channels(state)
-        # Default chat scope: next 12 h, strictly upcoming. `deep_search`
+        # Default chat scope: next 8 h, strictly upcoming. `deep_search`
         # widens to 7 days for queries like "what's on Champions League next
         # Tuesday" where the everyday window can't reach.
-        future_hours = 168 if body.deep_search else 12
+        future_hours = 168 if body.deep_search else 8
+        # Cap entries per channel to keep the prompt bounded. A normal-mode
+        # "what's on tonight" never needs 12 programmes from a single channel.
+        max_per_channel = None if body.deep_search else 6
         # If the user named a channel in their latest message, restrict the
         # EPG context to just those channels — no reason to send 149
         # favourites of programme data when the question is about one.
@@ -236,14 +239,16 @@ def build_router(state: Any) -> APIRouter:  # noqa: ANN401 — state is the main
             scoped_channels,
             past_hours=0,
             future_hours=future_hours,
+            max_per_channel=max_per_channel,
             only_upcoming=True,
         )
-        # Deep search across 149 channels × 7 days routinely blows past the
-        # model's input limit when the user asks about a specific programme
-        # ("когда будет фильм X?"). Narrow by content keywords *if* there's
-        # something to match — open-ended "what's good this week" queries
-        # still see the full slate.
-        if body.deep_search and len(scoped_channels) == len(main_channels):
+        # Keyword-narrow whenever the user's message has concrete search
+        # terms — "футбол сегодня", "фильм про космос", "когда Спартак?".
+        # If there are no matches we keep the full slate so open-ended
+        # "что посмотреть?" queries still have context. Previously this
+        # only ran in deep-search mode; applying it in normal mode too
+        # routinely cuts the EPG block 5-10x.
+        if len(scoped_channels) == len(main_channels):
             schedules = narrow_by_programme_content(last_user_msg, schedules)
         history = [m.model_dump() for m in body.messages]
 

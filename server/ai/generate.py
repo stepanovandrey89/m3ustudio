@@ -149,8 +149,8 @@ async def stream_chat(
     """
     epg_text = schedule_to_text(schedules, lang=lang, compact=deep)
     now_iso = datetime.now(UTC).isoformat()
-    window_ru = "ближайшие 7 суток" if deep else "ближайшие 12 часов"
-    window_en = "the next 7 days" if deep else "the next 12 hours"
+    window_ru = "ближайшие 7 суток" if deep else "ближайшие 8 часов"
+    window_en = "the next 7 days" if deep else "the next 8 hours"
     deep_hint_ru = (
         "\nПользователь включил глубокий поиск (дата/событие/команда/канал). "
         "Отбирай только то, что реально совпадает с запросом. "
@@ -177,11 +177,15 @@ async def stream_chat(
         if deep
         else ""
     )
+    # Prompt is split into stable (cached) + volatile (per-call) system
+    # messages so OpenAI's prefix-cache can hit across turns within a single
+    # chat session. The EPG block is huge but identical between a user's
+    # first question and their follow-up; now_iso changes every call and is
+    # placed AFTER the cached prefix so it doesn't invalidate it.
     context_msg = {
         "role": "system",
         "content": (
             (
-                f"СЕЙЧАС (UTC): {now_iso}\n"
                 f"EPG НИЖЕ — только передачи, идущие прямо сейчас или стартующие\n"
                 f"в {window_ru}. Всё, что в этом блоке, ЕЩЁ НЕ ЗАКОНЧИЛОСЬ.\n"
                 "Формат строк: `ДеньНед ЧЧ:ММ · длительность · Название — описание`\n"
@@ -193,7 +197,6 @@ async def stream_chat(
             )
             if lang == "ru"
             else (
-                f"NOW (UTC): {now_iso}\n"
                 f"EPG BELOW contains only programmes airing right now or starting\n"
                 f"within {window_en}. Nothing in this block has ended yet.\n"
                 "Line format: `WeekDay HH:MM · duration · Title — description`\n"
@@ -205,12 +208,25 @@ async def stream_chat(
             )
         ),
     }
+    now_msg = {
+        "role": "system",
+        "content": f"СЕЙЧАС (UTC): {now_iso}" if lang == "ru" else f"NOW (UTC): {now_iso}",
+    }
 
     full_messages: list[dict[str, Any]] = [
         {"role": "system", "content": chat_system(lang)},
         context_msg,
+        now_msg,
         *messages,
     ]
+    # Log prompt size so before/after wins are measurable in the journal.
+    _prompt_chars = sum(
+        len(m.get("content", "")) for m in full_messages if isinstance(m.get("content"), str)
+    )
+    print(
+        f"[ai-chat] prompt size: {_prompt_chars} chars, {len(schedules)} channels, deep={deep}",
+        flush=True,
+    )
 
     tools = chat_tools()
     max_rounds = 4
