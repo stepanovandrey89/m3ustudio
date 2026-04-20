@@ -513,21 +513,74 @@ def build_router(state: Any) -> APIRouter:  # noqa: ANN401 — state is the main
 # ---------------------------------------------------------------------------
 
 
+_SPORT_LEAGUE_WIKI_MAP: dict[str, str] = {
+    # Well-known competition/league keywords → Russian Wikipedia article
+    # name whose lead image is the league logo.
+    "рпл": "Российская Премьер-Лига",
+    "российская премьер-лига": "Российская Премьер-Лига",
+    "russian premier league": "Российская Премьер-Лига",
+    "премьер-лига": "Премьер-лига Англии",
+    "premier league": "Премьер-лига Англии",
+    "ла лига": "Ла Лига",
+    "la liga": "Ла Лига",
+    "чемпионат испании": "Ла Лига",
+    "segunda": "Сегунда",
+    "сегунда": "Сегунда",
+    "кубок испании": "Кубок Испании по футболу",
+    "copa del rey": "Кубок Испании по футболу",
+    "ligue 1": "Лига 1",
+    "чемпионат франции": "Лига 1",
+    "bundesliga": "Бундеслига",
+    "бундеслига": "Бундеслига",
+    "чемпионат германии": "Бундеслига",
+    "serie a": "Серия A (Италия)",
+    "серия а": "Серия A (Италия)",
+    "чемпионат италии": "Серия A (Италия)",
+    "чемпионат турции": "Суперлига Турции",
+    "super lig": "Суперлига Турции",
+    "лига чемпионов": "Лига чемпионов УЕФА",
+    "champions league": "Лига чемпионов УЕФА",
+    "лига европы": "Лига Европы УЕФА",
+    "europa league": "Лига Европы УЕФА",
+    "nhl": "Национальная хоккейная лига",
+    "нхл": "Национальная хоккейная лига",
+    "nba": "Национальная баскетбольная ассоциация",
+    "нба": "Национальная баскетбольная ассоциация",
+    "кхл": "Континентальная хоккейная лига",
+    "khl": "Континентальная хоккейная лига",
+    "formula 1": "Формула-1",
+    "формула 1": "Формула-1",
+    "formula 2": "Формула-2",
+    "формула 2": "Формула-2",
+    "formula 3": "Формула-3",
+    "формула 3": "Формула-3",
+    "ufc": "Ultimate Fighting Championship",
+    "motogp": "MotoGP",
+    "nascar": "NASCAR",
+    "наскар": "NASCAR",
+    "волейбол чемпионат россии": "Суперлига России по волейболу среди мужчин",
+    "российская волейбольная суперлига": "Суперлига России по волейболу среди мужчин",
+    "гандбол кубок россии": "Чемпионат России по гандболу среди мужчин",
+    "snl": "Национальная лига (Швейцария)",
+    "кубок россии": "Кубок России по футболу",
+}
+
+
 async def _resolve_sport_art(posters: PosterResolver, entry: Any) -> str:  # noqa: ANN401
     """Pick an image for a sport event card via Wikipedia.
 
-    TheSportsDB test key got rate-limited (429) — production use needs
-    their Patreon-gated key. Back to Wikipedia with Commons allowed:
-    resolves team crests and league logos reliably and for free. Not as
-    rich as real match posters but consistent and no external rate limit.
-
-    Strategy:
-      1. Latin poster_keywords as-is ("Bayern Munich", "UFC" → crest/logo).
-      2. First / second half of an "X vs Y" split.
-      3. Cyrillic title as fallback.
+    Strategy (progressive fallback, stop on first hit):
+      1. Explicit league articles from a curated map (РПЛ, NHL, La Liga,
+         Champions League, Формула-1, UFC, etc.) — these reliably have
+         logos on Russian Wikipedia.
+      2. Each "X vs Y" half as a football club ("ФК ЦСКА" finds the
+         club article rather than the city). Also "ХК Динамо" for
+         hockey queries.
+      3. Raw halves and the full hint / title.
     """
     hint = (entry.poster_keywords or "").strip()
     title = (entry.title or "").strip()
+    combined = f"{title} {hint}".lower()
 
     def _halves(text: str) -> list[str]:
         low = text.lower()
@@ -537,13 +590,53 @@ async def _resolve_sport_art(posters: PosterResolver, entry: Any) -> str:  # noq
                 return [text[:idx].strip(), text[idx + len(splitter) :].strip()]
         return []
 
+    def _club_variants(name: str) -> list[str]:
+        """Produce football/hockey club search variants.
+
+        "Краснодар" alone hits the city article; "ФК Краснодар" hits
+        the football club. Which prefix applies depends on the sport
+        context extracted from the title/hint.
+        """
+        out = [name]
+        n = name.strip().strip('"«»').strip()
+        if not n:
+            return out
+        if any(
+            kw in combined
+            for kw in ("футбол", "football", "soccer", "premier", "liga", "serie", "bundesliga")
+        ):
+            out.append(f"ФК {n}")
+        if any(kw in combined for kw in ("хоккей", "hockey", "nhl", "кхл", "snl")):
+            out.append(f"ХК {n}")
+        if any(kw in combined for kw in ("волейбол", "volleyball")):
+            out.append(f"ВК {n}")
+        if any(kw in combined for kw in ("баскетбол", "basketball", "nba")):
+            out.append(f"БК {n}")
+        return out
+
     queries: list[str] = []
-    if hint:
+
+    # 1. League logo shortcuts — longest key first so "russian premier
+    # league" is tried before the bare "premier league".
+    for key in sorted(_SPORT_LEAGUE_WIKI_MAP, key=len, reverse=True):
+        if key in combined:
+            article = _SPORT_LEAGUE_WIKI_MAP[key]
+            if article not in queries:
+                queries.append(article)
+            break
+
+    # 2. Club variants (ФК/ХК/ВК prefixes) for each matchup half.
+    halves = _halves(hint) or _halves(title)
+    for half in halves:
+        for variant in _club_variants(half):
+            if variant and variant not in queries:
+                queries.append(variant)
+
+    # 3. Raw fallbacks — original hint, original title.
+    if hint and hint not in queries:
         queries.append(hint)
-        queries.extend(_halves(hint))
     if title and title not in queries:
         queries.append(title)
-        queries.extend(h for h in _halves(title) if h not in queries)
 
     for q in queries:
         if not q:

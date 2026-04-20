@@ -24,7 +24,9 @@ the programme list. Missing → empty list → UI hides the EPG panel.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import gzip
+import json
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, timezone
@@ -39,6 +41,10 @@ from server.logos.iptv_db import normalize
 DEFAULT_EPG_URL = "http://epg.it999.ru/edem.xml.gz"
 CACHE_TTL_SECONDS = 6 * 3600  # 6 hours
 WINDOW_DAYS = 3  # keep programmes within ±3 days of load time
+# JSON cache TTL — how long to trust the pre-parsed main-only index on
+# disk before we re-parse the source XML. 24h keeps the file fresh
+# without paying the XML-parse cost on every restart.
+JSON_CACHE_TTL_SECONDS = 24 * 3600
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,10 +144,65 @@ class EpgGuide:
     def _cache_path(self) -> Path:
         return self._cache_dir / "_epg.xml.gz"
 
+    def _json_cache_path(self) -> Path:
+        return self._cache_dir / "_main_epg.json"
+
     def _is_fresh(self, path: Path) -> bool:
         if not path.exists() or path.stat().st_size == 0:
             return False
         return (time.time() - path.stat().st_mtime) < CACHE_TTL_SECONDS
+
+    def _is_json_fresh(self) -> bool:
+        p = self._json_cache_path()
+        if not p.exists() or p.stat().st_size == 0:
+            return False
+        return (time.time() - p.stat().st_mtime) < JSON_CACHE_TTL_SECONDS
+
+    def _save_json(self, index: dict[str, list[Programme]]) -> None:
+        """Write the in-memory index to a compact JSON file.
+
+        The JSON is the fast-path cache — next startup can skip the
+        450 MB XML parse and restore the index in ~100 ms.
+        """
+        payload = {key: [p.to_dict() for p in progs] for key, progs in index.items()}
+        path = self._json_cache_path()
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        try:
+            tmp.write_text(
+                json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+                encoding="utf-8",
+            )
+            tmp.replace(path)
+        except OSError:
+            with contextlib.suppress(OSError):
+                tmp.unlink()
+
+    def _load_json(self) -> dict[str, list[Programme]] | None:
+        path = self._json_cache_path()
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        out: dict[str, list[Programme]] = {}
+        for key, progs_data in data.items():
+            progs: list[Programme] = []
+            for pd in progs_data:
+                try:
+                    start = datetime.fromisoformat(str(pd["start"]))
+                    stop = datetime.fromisoformat(str(pd["stop"]))
+                except (KeyError, ValueError, TypeError):
+                    continue
+                progs.append(
+                    Programme(
+                        title=str(pd.get("title", "")),
+                        description=str(pd.get("description", "")),
+                        start=start,
+                        stop=stop,
+                    )
+                )
+            if progs:
+                out[key] = progs
+        return out
 
     async def _download(self) -> Path | None:
         path = self._cache_path()
@@ -250,7 +311,19 @@ class EpgGuide:
                     index[key] = progs
         return index
 
-    async def load(self) -> None:
+    async def load(self, main_names: set[str] | None = None) -> None:
+        """Load the EPG index.
+
+        When ``main_names`` is provided, the index is filtered to just
+        those channel display-names (user's "Основное" list). The
+        filtered index is persisted to JSON so the next restart can skip
+        the XML download + parse entirely and be ready in ~100 ms.
+
+        Call order on each process start:
+          1. JSON cache fresh → load from JSON (sync, ~100 ms). Done.
+          2. JSON stale/missing → download XML → parse → filter to
+             main_names → save JSON → done.
+        """
         if self._loaded:
             return
 
@@ -259,6 +332,15 @@ class EpgGuide:
                 return
             self._loading = True
             try:
+                # Fast path: recent JSON cache covers startup without
+                # touching the network or the big XML file.
+                if self._is_json_fresh():
+                    cached = await asyncio.to_thread(self._load_json)
+                    if cached:
+                        self._index = cached
+                        self._loaded = True
+                        return
+
                 path = await self._download()
                 if path is None:
                     return
@@ -267,8 +349,15 @@ class EpgGuide:
                 # parse is CPU-bound (~2-4s) and would otherwise block /api
                 # requests while the big XML is walked.
                 index = await asyncio.to_thread(self._parse, path)
+                if main_names:
+                    norm = {normalize(n) for n in main_names if n}
+                    norm.discard("")
+                    if norm:
+                        index = {k: v for k, v in index.items() if k in norm}
                 self._index = index
                 self._loaded = True
+                # Persist for next startup — non-fatal on failure.
+                await asyncio.to_thread(self._save_json, index)
             finally:
                 self._loading = False
 

@@ -266,10 +266,20 @@ async def _startup() -> None:
     # EPG icon index — parse from cached XML if available (fast, no network)
     epg_gz = EPG_CACHE / "_epg.xml.gz"
     _state.epg_icons.load_from_xml_gz(epg_gz)
-    # EPG is large (~43MB + parse) — fire it off in the background so the
-    # first /api/source request isn't blocked. Subsequent /api/epg/* calls
-    # return empty until the guide finishes loading.
-    asyncio.create_task(_load_epg_in_background())
+    # EPG: try the fast JSON cache synchronously at startup so /api/ai/digest
+    # and similar never race the "guide not loaded yet" window. If the JSON
+    # is stale or missing, fall back to the old background path (downloads
+    # and parses the 43 MB gz asynchronously, then writes a fresh JSON).
+    _state_main_names = {
+        ch.name for ch in _state.playlist.channels if ch.id in set(_state.store.current_ids())
+    }
+    if _state.epg._is_json_fresh():
+        cached = _state.epg._load_json()
+        if cached:
+            _state.epg._index = cached
+            _state.epg._loaded = True
+    if not _state.epg.loaded:
+        asyncio.create_task(_load_epg_in_background(_state_main_names))
     asyncio.create_task(_warm_logo_cache())
     # Background task that kills idle transcode sessions every 30s.
     _state.transcode_cleanup_task = asyncio.create_task(run_cleanup_loop(_state.transcode))
@@ -281,10 +291,10 @@ async def _startup() -> None:
         await _state.recordings.resume_pending()
 
 
-async def _load_epg_in_background() -> None:
+async def _load_epg_in_background(main_names: set[str] | None = None) -> None:
     # Network / parse errors must not crash the app — fail silently.
     with contextlib.suppress(Exception):
-        await _state.epg.load()
+        await _state.epg.load(main_names=main_names)
 
 
 async def _warm_logo_cache() -> None:
