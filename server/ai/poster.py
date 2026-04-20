@@ -20,8 +20,9 @@ from urllib.parse import quote
 
 import httpx
 
-TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/w500"
+TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/w780"
 TMDB_SEARCH_URL = "https://api.themoviedb.org/3/search/multi"
+TMDB_IMAGES_URL = "https://api.themoviedb.org/3/{media_type}/{id}/images"
 WIKI_SUMMARY_URL_TEMPLATE = "https://{lang}.wikipedia.org/api/rest_v1/page/summary/{title}"
 WIKI_API_URL_TEMPLATE = "https://{lang}.wikipedia.org/w/api.php"
 CACHE_TTL_SECONDS = 30 * 24 * 3600  # 30 days
@@ -153,20 +154,18 @@ class PosterResolver:
             headers={"User-Agent": "m3u-studio/0.7 (poster-lookup)"},
         ) as client:
             hit: PosterHit | None = None
-            # Russian films are almost always wrong on TMDB (it matches
-            # "Брат" to "Brothers" or generic Russian-language entries),
-            # while Wikipedia RU has the canonical poster 95% of the
-            # time. Swap the order when the query is Cyrillic.
-            cyrillic = _has_cyrillic(keywords)
-            if cyrillic:
+            # TMDB first for every query — the /images endpoint now picks
+            # the Russian-language poster variant when the film has one,
+            # which gives us canonical theatrical artwork for both Russian
+            # films and Hollywood dubs. Wikipedia is kept as a fallback
+            # only; its fuzzy page-image heuristic routinely returns actor
+            # portraits or unrelated paintings (e.g. "Матрица" → Muldashev,
+            # "Интерны" → Ohlobystin) when the exact article title doesn't
+            # resolve, which silently corrupts the digest.
+            if self._tmdb_key:
+                hit = await _tmdb_search(client, keywords, lang, self._tmdb_key)
+            if hit is None:
                 hit = await _wiki_lookup(client, keywords, lang)
-                if hit is None and self._tmdb_key:
-                    hit = await _tmdb_search(client, keywords, lang, self._tmdb_key)
-            else:
-                if self._tmdb_key:
-                    hit = await _tmdb_search(client, keywords, lang, self._tmdb_key)
-                if hit is None:
-                    hit = await _wiki_lookup(client, keywords, lang)
             if hit is not None:
                 # Pre-fetch the image so the frontend's first render hits a
                 # file on disk instead of racing with the TMDB/Wiki round-trip.
@@ -181,12 +180,22 @@ async def _tmdb_search(
     lang: str,
     api_key: str,
 ) -> PosterHit | None:
-    """Try the full query, then progressively simpler variants.
+    """Search TMDB, then pull the language-specific poster via /images.
 
-    TMDB's search treats every token as a filter — "Inception 2010 film"
-    returns zero results because no title literally contains the word
-    "film". Stripping the disambiguation tail recovers the match.
+    TMDB's default ``poster_path`` on a search result is whatever poster
+    happens to be primary for the film's original release — usually the
+    English theatrical one-sheet. For Russian films (and Hollywood titles
+    we watch in Russian) the /images endpoint returns every poster variant
+    including localized Russian theatrical plakats. We pick the best
+    language match; if the images call fails we gracefully fall back to
+    the default poster_path from search.
+
+    The search still tries progressively simpler query variants ("Inception
+    2010 film" → "Inception") because TMDB's search treats every token
+    as a filter.
     """
+    pref = "ru" if lang == "ru" else "en"
+
     for query in _query_variants(keywords):
         params = {
             "api_key": api_key,
@@ -201,10 +210,87 @@ async def _tmdb_search(
             continue
         data: dict[str, Any] = resp.json()
         for hit in data.get("results", []):
-            poster = hit.get("poster_path")
-            if poster:
-                return PosterHit(url=f"{TMDB_IMAGE_BASE}{poster}", source="tmdb")
+            media_type = hit.get("media_type") or "movie"
+            if media_type not in ("movie", "tv"):
+                continue
+            tmdb_id = hit.get("id")
+            default_poster = hit.get("poster_path")
+            chosen = None
+            if tmdb_id:
+                chosen = await _tmdb_pick_localized_poster(
+                    client, media_type, tmdb_id, pref, api_key
+                )
+            final = chosen or default_poster
+            if final:
+                return PosterHit(url=f"{TMDB_IMAGE_BASE}{final}", source="tmdb")
     return None
+
+
+async def _tmdb_pick_localized_poster(
+    client: httpx.AsyncClient,
+    media_type: str,
+    tmdb_id: int,
+    pref: str,
+    api_key: str,
+) -> str | None:
+    """Pull /images for a TMDB title and return the best poster path.
+
+    Ranking (lower is better):
+      0. poster whose ``iso_639_1`` matches ``pref`` (e.g. ``ru``)
+      1. poster with no language tag (neutral artwork, often the best
+         theatrical imagery TMDB has)
+      2. English poster
+      3. any other language
+    Ties break by highest community vote_count, then vote_average.
+
+    Returns the chosen poster_path or ``None`` if /images failed or the
+    film has no poster variants at all.
+    """
+    url = TMDB_IMAGES_URL.format(media_type=media_type, id=tmdb_id)
+    params = {
+        "api_key": api_key,
+        "include_image_language": f"{pref},null,en",
+    }
+    try:
+        resp = await client.get(url, params=params)
+        resp.raise_for_status()
+    except httpx.HTTPError:
+        return None
+    posters = resp.json().get("posters") or []
+    if not posters:
+        return None
+
+    def rank(p: dict[str, Any]) -> tuple[int, float, float]:
+        iso = p.get("iso_639_1") or ""
+        if iso == pref:
+            order = 0
+        elif iso == "":
+            order = 1
+        elif iso == "en":
+            order = 2
+        else:
+            order = 3
+        return (order, -(p.get("vote_count") or 0), -(p.get("vote_average") or 0))
+
+    posters.sort(key=rank)
+    return posters[0].get("file_path")
+
+
+def _is_fair_use_poster(url: str | None) -> bool:
+    """Whether a Wikipedia image URL looks like a fair-use film poster
+    (hosted in a language-specific namespace, e.g. /wikipedia/ru/ or
+    /wikipedia/en/), as opposed to a generic Commons photo.
+
+    Commons-hosted images (/wikipedia/commons/) are usually free-license
+    portraits of actors/authors/creators — Wikipedia's fuzzy search
+    surfaces them instead of the film article when the EPG title mentions
+    a recognisable name. Those false matches were the main source of
+    "poster is Ivan Okhlobystin's face" cases, so the Wiki pipeline now
+    only accepts images from fair-use language namespaces.
+    """
+    if not url:
+        return False
+    return "/wikipedia/ru/" in url or "/wikipedia/en/" in url
 
 
 async def _wiki_lookup(
@@ -214,13 +300,10 @@ async def _wiki_lookup(
 ) -> PosterHit | None:
     """Resolve a Wikipedia image via three cascading strategies.
 
-    1. REST summary with the exact title — fastest, great for unambiguous films.
-    2. MediaWiki fuzzy search (handles mis-capitalization, inflected forms,
-       and generic queries like "Roma vs Atalanta" by ranking pages by
-       relevance and picking the top one that actually has an image).
-    3. For "X vs Y" queries, fall back to searching just the first half so
-       a match like "Roma vs Atalanta" can return the AS Roma crest when no
-       match-specific article exists.
+    Only fair-use namespace images are accepted (/wikipedia/ru/ and
+    /wikipedia/en/) — Commons-hosted photos are rejected because
+    Wikipedia's fuzzy page-image API tends to surface actor portraits
+    rather than the film poster when the query is ambiguous.
     """
     order = ["ru", "en"] if lang == "ru" else ["en", "ru"]
     stripped = keywords.strip()
@@ -232,7 +315,7 @@ async def _wiki_lookup(
     for query in _query_variants(stripped):
         for wiki_lang in order:
             url = await _wiki_summary(client, query, wiki_lang)
-            if url:
+            if url and _is_fair_use_poster(url):
                 return PosterHit(url=url, source="wikipedia")
 
     # 2. Direct page-image lookup for pages that don't surface via REST
@@ -240,14 +323,14 @@ async def _wiki_lookup(
     for query in _query_variants(stripped):
         for wiki_lang in order:
             url = await _wiki_direct(client, query, wiki_lang)
-            if url:
+            if url and _is_fair_use_poster(url):
                 return PosterHit(url=url, source="wikipedia")
 
     # 3. Fuzzy search — last resort when no exact page matches.
     for query in _query_variants(stripped):
         for wiki_lang in order:
             url = await _wiki_search(client, query, wiki_lang)
-            if url:
+            if url and _is_fair_use_poster(url):
                 return PosterHit(url=url, source="wikipedia")
 
     # 4. "X vs Y" — try each half (useful for sports matchups without a
