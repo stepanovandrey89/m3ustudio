@@ -117,20 +117,41 @@ def build_router(state: Any) -> APIRouter:  # noqa: ANN401 — state is the main
                 return JSONResponse({"cached": True, **cached.to_dict()})
 
         main_channels = _main_channels(state)
-        # Cinema: feature films only. Drop channels whose ORIGINAL group
-        # is Sport/News/Kids/Music — their "cinema"-ish slots are mostly
-        # talk-shows, biographies and broadcasts, not real films. Also
-        # hard-exclude generalist news-heavy channels that stay in the
-        # "Основное" group (ТВЦ/НТВ).
+        # Cinema: feature films only. All Main channels sit in the
+        # "Основное" group in the source playlist so we can't filter by
+        # channel-group here — use name patterns instead. Drops sport/
+        # news/kids/music channels plus generalist news-heavy channels
+        # (ТВЦ / НТВ) that otherwise leak talk-shows into "cinema".
         if theme_typed == "cinema":
-            og = state.store.original_groups_map()
-            excluded_groups = {"Спорт", "Новости", "Детские", "Музыка"}
-            excluded_name_fragments = ("твц", "нтв")
+            excluded_name_patterns = (
+                "матч",
+                "match",
+                "setanta",
+                "eurosport",
+                "sport",
+                "нтв",
+                "твц",
+                "россия 24",
+                "мир 24",
+                "рбк",
+                "euronews",
+                "дождь",
+                "карусель",
+                "мульт",
+                "nick",
+                "disney",
+                "дисней",
+                "детск",
+                "kids",
+                "муз тв",
+                "mtv",
+                "music",
+                "музыка",
+            )
             main_channels = [
                 ch
                 for ch in main_channels
-                if og.get(ch.id, "") not in excluded_groups
-                and not any(n in ch.name.lower() for n in excluded_name_fragments)
+                if not any(p in ch.name.lower() for p in excluded_name_patterns)
             ]
         schedules = build_main_schedule(
             state.epg,
