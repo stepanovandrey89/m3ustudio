@@ -768,6 +768,13 @@ async def _hydrate_digest_posters(
 
     hydrated = await asyncio.gather(*(_resolve(i) for i in digest.items))
 
+    # Poster is mandatory for inclusion. Series episodes ("Интерны. 57 с."),
+    # sports broadcasts ("НАСКАР. 5-й этап"), talk-shows and news rarely
+    # have canonical TMDB/Wiki articles with a poster, while real feature
+    # films always resolve. This one rule cleans up the cinema digest far
+    # more reliably than any title-regex heuristic can.
+    with_posters = [e for e in hydrated if e.poster_url]
+
     # Sort by start time — nearest first. The prompt asks for this order
     # but gpt-4o-mini occasionally returns items in arrival/channel order,
     # so enforce it server-side. Falls back gracefully for items missing
@@ -775,7 +782,7 @@ async def _hydrate_digest_posters(
     def _start_key(entry: DigestEntry) -> str:
         return entry.start or "9999"
 
-    hydrated_sorted = sorted(hydrated, key=_start_key)
+    hydrated_sorted = sorted(with_posters, key=_start_key)
     return Digest(
         date=digest.date,
         theme=digest.theme,
@@ -783,6 +790,55 @@ async def _hydrate_digest_posters(
         generated_at=digest.generated_at,
         items=tuple(hydrated_sorted),
     )
+
+
+# Episode / series markers — matches "Интерны. 57 с.", "Папины дочки, 8 серия",
+# "2 сезон 3 эп.", etc. Used to exclude multi-episode shows from the cinema
+# digest on top of the positive keyword filter.
+_SERIES_MARKER_RE = re.compile(
+    r"(\b\d+\s*(?:с\.|серия|серии|эп\.|эпизод)|\bсезон\b|\bсерия\s*\d+)",
+    re.IGNORECASE,
+)
+# Sport / broadcast markers that occasionally slip into cinema slots on
+# generalist channels ("5-й этап", "Гран-при", "трансляция"). Combined
+# with the channel-name filter this catches e.g. НАСКАР on ТНТ.
+_SPORT_BROADCAST_RE = re.compile(
+    r"\b("
+    r"гонка|этап|матч|чемпионат|кубок\b|трансляц|гран-при|ufc|дерби|"
+    r"премьер-лига|лига чемпион|лига европ|кхл|рпл|нба|nba|nhl|"
+    r"football|soccer|basketball|hockey|tennis|formula|nascar|grand prix"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _exclude_non_cinema(schedules: list) -> list:
+    """Drop series episodes and sports broadcasts from cinema schedules.
+
+    The keyword-inclusion filter alone can't catch an episode of «Интерны»
+    whose description mentions «комедия» — it matches the cinema theme by
+    word but is still a series. A negative regex applied AFTER the
+    positive filter makes the cinema set cleanly feature-film.
+    """
+    from server.ai.context import ChannelSchedule  # local import, tight loop
+
+    clean: list[ChannelSchedule] = []
+    for sch in schedules:
+        matching = tuple(
+            p
+            for p in sch.programmes
+            if not _SERIES_MARKER_RE.search(p.title) and not _SPORT_BROADCAST_RE.search(p.title)
+        )
+        if matching:
+            clean.append(
+                ChannelSchedule(
+                    channel_id=sch.channel_id,
+                    channel_name=sch.channel_name,
+                    group=sch.group,
+                    programmes=matching,
+                )
+            )
+    return clean
 
 
 def _narrow_by_keywords(schedules: list, keywords: list[str]) -> list:
