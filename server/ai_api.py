@@ -1022,15 +1022,45 @@ async def _hydrate_digest_posters(
 
     hydrated = with_poster
 
-    # Dedupe by normalized title — gpt sometimes surfaces the same film
-    # from two channels in the same digest; we only want one card.
-    seen: set[str] = set()
+    # Dedupe by normalized title. For sport the model often returns the
+    # same match with different prefixes ("Футбол. Чемпионат Италии.
+    # Лечче - Фиорентина" vs "Чемпионат Италии. Лечче - Фиорентина"),
+    # so we strip common wrapper words, quotes, and punctuation, then
+    # also match "A contains B" / "B contains A" so the shorter variant
+    # dedupes against the longer.
+    def _norm_dedupe_key(title: str) -> str:
+        t = title.lower()
+        # drop obvious wrapper/genre prefixes
+        for prefix in (
+            "футбол.",
+            "хоккей.",
+            "баскетбол.",
+            "волейбол.",
+            "теннис.",
+            "автоспорт.",
+            "мотоспорт.",
+            "трансляция",
+        ):
+            t = t.replace(prefix, " ")
+        # collapse punctuation + whitespace to single spaces
+        t = re.sub(r"[«»\"'`().\-–—,:;!?]", " ", t)
+        t = re.sub(r"\s+", " ", t).strip()
+        return t
+
+    seen: list[str] = []
     unique: list[DigestEntry] = []
     for entry in hydrated:
-        key = entry.title.strip().lower()
-        if key and key not in seen:
-            seen.add(key)
-            unique.append(entry)
+        key = _norm_dedupe_key(entry.title)
+        if not key:
+            continue
+        # Drop if we already saw this key exactly OR if it's a substring
+        # of an earlier (longer) key, or vice versa — same match, one
+        # variant is a prefix/superset of the other.
+        dupe = any(key == s or key in s or s in key for s in seen)
+        if dupe:
+            continue
+        seen.append(key)
+        unique.append(entry)
 
     # Sort by start time — nearest first.
     def _start_key(entry: DigestEntry) -> str:
@@ -1046,11 +1076,17 @@ async def _hydrate_digest_posters(
     )
 
 
-# Episode / series markers — matches "Интерны. 57 с.", "Папины дочки, 8 серия",
-# "2 сезон 3 эп.", etc. Used to exclude multi-episode shows from the cinema
-# digest on top of the positive keyword filter.
+# Episode / series markers — matches "Интерны. 57 с.", "Клон (с.184)",
+# "Папины дочки, 8 серия", "2 сезон 3 эп.", etc. Catches both "N с."
+# and "с.N" orders plus keyword variants.
 _SERIES_MARKER_RE = re.compile(
-    r"(\b\d+\s*(?:с\.|серия|серии|эп\.|эпизод)|\bсезон\b|\bсерия\s*\d+)",
+    r"("
+    r"\b\d+\s*(?:с\.|серия|серии|эп\.|эпизод)"
+    r"|\bс\.\s*\d+"
+    r"|\bсезон\b"
+    r"|\bсерия\s*\d+"
+    r"|\(\s*\d+\s*сер(?:ия|ий)?"
+    r")",
     re.IGNORECASE,
 )
 # Sport / broadcast markers that occasionally slip into cinema slots on
