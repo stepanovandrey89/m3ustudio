@@ -5,6 +5,7 @@ Kept away from the FastAPI handlers so the business logic stays testable.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from collections.abc import AsyncIterator
@@ -249,20 +250,35 @@ async def stream_chat(
             if errored or not pending:
                 return
 
-            # Record the assistant's tool-calling turn once, then feed every
-            # tool result back in order so the next round has full context.
+            # Record the assistant's tool-calling turn once, then execute
+            # every pending tool in PARALLEL — each recommend_programme hits
+            # TMDB + Wikipedia so serialising them would stack 3-15s of
+            # round-trip per card. Using asyncio.as_completed streams each
+            # result to the frontend the moment it resolves; the per-tool
+            # order of the final messages list is preserved separately so
+            # the next LLM round sees them in the same order the model
+            # emitted them.
             full_messages.append(pending[0]["assistant_message"])
-            for call in pending:
+
+            async def _run_call(idx: int, call: dict[str, Any]) -> tuple[int, dict[str, Any]]:
                 try:
-                    result = await tool_executor.execute(call["name"], call["arguments"])
+                    return idx, await tool_executor.execute(call["name"], call["arguments"])
                 except Exception as exc:  # noqa: BLE001 — surface to user
-                    result = {"ok": False, "error": str(exc)}
+                    return idx, {"ok": False, "error": str(exc)}
+
+            tasks = [asyncio.create_task(_run_call(i, c)) for i, c in enumerate(pending)]
+            results_ordered: list[dict[str, Any] | None] = [None] * len(pending)
+            for fut in asyncio.as_completed(tasks):
+                idx, result = await fut
+                call = pending[idx]
+                results_ordered[idx] = result
                 yield {
                     "type": "tool_result",
                     "call_id": call["call_id"],
                     "name": call["name"],
                     "result": result,
                 }
+            for call, result in zip(pending, results_ordered, strict=True):
                 full_messages.append(
                     {
                         "role": "tool",

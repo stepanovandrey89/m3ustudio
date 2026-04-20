@@ -148,7 +148,7 @@ class PosterResolver:
 
     async def _fetch(self, keywords: str, lang: str) -> PosterHit | None:
         async with httpx.AsyncClient(
-            timeout=6.0,
+            timeout=4.0,
             follow_redirects=True,
             headers={"User-Agent": "m3u-studio/0.7 (poster-lookup)"},
         ) as client:
