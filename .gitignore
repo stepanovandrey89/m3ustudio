@@ -34,6 +34,7 @@ web/.vite/
 .env
 .env.*
 !.env.example
+/scripts/.deploy.env
 
 # ── Editor & OS ──────────────────────────────────────────────────────────────
 .DS_Store

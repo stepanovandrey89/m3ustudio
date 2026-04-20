@@ -14,7 +14,14 @@
 
 set -euo pipefail
 
-HOST=${DEPLOY_HOST:-root@REDACTED_IP}
+# Load local (gitignored) deploy env if present — contains the production host
+# so it is never committed. Create scripts/.deploy.env from .deploy.env.example.
+if [ -f "$(dirname "$0")/.deploy.env" ]; then
+  # shellcheck disable=SC1091
+  . "$(dirname "$0")/.deploy.env"
+fi
+
+HOST=${DEPLOY_HOST:?DEPLOY_HOST is not set — create scripts/.deploy.env from .deploy.env.example}
 REMOTE_DIR=${DEPLOY_DIR:-/opt/m3uplaylist}
 SERVICE_USER=${DEPLOY_USER:-m3ustudio}
 
