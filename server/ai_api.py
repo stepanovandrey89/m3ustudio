@@ -903,6 +903,57 @@ _THEME_KEYWORDS: dict[str, list[str]] = {
 DIGEST_TARGET_ITEMS = 9
 
 
+async def _enhance_missing_posters(
+    missing: list[Any],
+    posters: PosterResolver,
+    client: Any,  # noqa: ANN401 — AsyncOpenAI
+    theme: str,
+) -> None:
+    """Offline enhancer: for digest items whose poster lookup missed,
+    ask gpt-4.1 to propose cleaner search keywords and re-run the
+    resolver. Hits land in ``posters.json`` so the next refresh of the
+    same theme picks them up.
+
+    Runs as a detached asyncio.Task after the HTTP response is sent —
+    the user never waits on this path.
+    """
+    for entry in missing:
+        prompt = (
+            f"Suggest 2-4 concise English search keywords to find a poster "
+            f"or logo image for this TV item on TMDB or Wikipedia. "
+            f'Theme: {theme}. Title: "{entry.title[:120]}". '
+            f'Description: "{(entry.blurb or "")[:200]}". '
+            f"For a sport event reply with the league name (e.g. 'NHL', "
+            f"'Russian Premier League') or the first team name with the "
+            f"sport suffix ('FC Krasnodar', 'Spartak Moscow football'). "
+            f"For a film reply with the canonical title, year, and the word "
+            f"'film' (e.g. 'Inception 2010 film'). "
+            f"ONLY the keywords, no prose, no quotes."
+        )
+        try:
+            response = await client.chat.completions.create(
+                model="gpt-4.1",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=40,
+            )
+        except Exception as exc:  # noqa: BLE001 — this path must never crash the loop
+            print(f"[poster-enhance] llm-fail {entry.title[:40]!r}: {exc}", flush=True)
+            continue
+        text = (response.choices[0].message.content or "").strip()
+        if not text or len(text) > 120:
+            continue
+        try:
+            hit = await posters.resolve(text, "ru", allow_commons=(theme == "sport"))
+        except Exception as exc:  # noqa: BLE001
+            print(f"[poster-enhance] resolve-fail {text!r}: {exc}", flush=True)
+            continue
+        status = "HIT" if hit else "still-miss"
+        print(
+            f"[poster-enhance] {status} for {entry.title[:40]!r} via keywords={text!r}",
+            flush=True,
+        )
+
+
 async def _hydrate_digest_posters(
     digest: Any,  # noqa: ANN401
     posters: PosterResolver,
@@ -954,7 +1005,22 @@ async def _hydrate_digest_posters(
     # that slipped the filter; sport drops events whose Wiki crest lookup
     # failed. Better to show 6 solid cards than 9 with garbage imagery —
     # users reported the channel-logo fallback for sport as "говно".
-    hydrated = [e for e in hydrated if e.poster_url]
+    with_poster = [e for e in hydrated if e.poster_url]
+    missing_poster = [e for e in hydrated if not e.poster_url]
+
+    # Fire-and-forget: for items we had to drop, kick off a background
+    # task that asks gpt-4.1 to craft better search keywords and retries
+    # the resolver. Hits land in the disk-cache so the next refresh of
+    # this theme picks them up and surfaces the card. Budget is small
+    # (~1 call per missing item × ~5 items × ~1 refresh/day).
+    if missing_poster:
+        import server.ai.client as _ai_client
+
+        cli = _ai_client.get_client()
+        if cli is not None:
+            asyncio.create_task(_enhance_missing_posters(missing_poster, posters, cli, theme))
+
+    hydrated = with_poster
 
     # Dedupe by normalized title — gpt sometimes surfaces the same film
     # from two channels in the same digest; we only want one card.
