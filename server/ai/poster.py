@@ -129,11 +129,26 @@ class PosterResolver:
     def _key(keywords: str, lang: str) -> str:
         return f"{lang}::{re.sub(r'\\s+', ' ', keywords.strip().lower())}"
 
-    async def resolve(self, keywords: str, lang: str = "ru") -> PosterHit | None:
+    async def resolve(
+        self,
+        keywords: str,
+        lang: str = "ru",
+        *,
+        allow_commons: bool = False,
+    ) -> PosterHit | None:
+        """Resolve a poster.
+
+        ``allow_commons=True`` opens up Wikipedia Commons images — useful
+        for sport (team crests, league logos) where Commons hosts the
+        correct identity art. For film content keep it False; Commons
+        there yields actor portraits that look wrong as film posters.
+        """
         clean = keywords.strip()
         if not clean:
             return None
         key = self._key(clean, lang)
+        if allow_commons:
+            key = f"{key}::commons"
         cached = self._mem.get(key)
         if cached:
             ts, hit = cached
@@ -141,13 +156,19 @@ class PosterResolver:
             if time.time() - ts < ttl:
                 return hit
 
-        hit = await self._fetch(clean, lang)
+        hit = await self._fetch(clean, lang, allow_commons=allow_commons)
         async with self._lock:
             self._mem[key] = (time.time(), hit)
             self._save()
         return hit
 
-    async def _fetch(self, keywords: str, lang: str) -> PosterHit | None:
+    async def _fetch(
+        self,
+        keywords: str,
+        lang: str,
+        *,
+        allow_commons: bool = False,
+    ) -> PosterHit | None:
         async with httpx.AsyncClient(
             timeout=4.0,
             follow_redirects=True,
@@ -165,7 +186,7 @@ class PosterResolver:
             if self._tmdb_key:
                 hit = await _tmdb_search(client, keywords, lang, self._tmdb_key)
             if hit is None:
-                hit = await _wiki_lookup(client, keywords, lang)
+                hit = await _wiki_lookup(client, keywords, lang, allow_commons=allow_commons)
             if hit is not None:
                 # Pre-fetch the image so the frontend's first render hits a
                 # file on disk instead of racing with the TMDB/Wiki round-trip.
@@ -297,14 +318,23 @@ async def _wiki_lookup(
     client: httpx.AsyncClient,
     keywords: str,
     lang: str,
+    *,
+    allow_commons: bool = False,
 ) -> PosterHit | None:
     """Resolve a Wikipedia image via three cascading strategies.
 
-    Only fair-use namespace images are accepted (/wikipedia/ru/ and
-    /wikipedia/en/) — Commons-hosted photos are rejected because
-    Wikipedia's fuzzy page-image API tends to surface actor portraits
-    rather than the film poster when the query is ambiguous.
+    By default only fair-use namespace images are accepted
+    (/wikipedia/ru/, /wikipedia/en/); Commons-hosted photos are rejected
+    because Wikipedia's fuzzy page-image API returns actor portraits on
+    ambiguous film queries. For sport ``allow_commons=True`` opens it
+    up — team crests, league logos and event trophies live on Commons.
     """
+
+    def acceptable(url: str | None) -> bool:
+        if not url:
+            return False
+        return allow_commons or _is_fair_use_poster(url)
+
     order = ["ru", "en"] if lang == "ru" else ["en", "ru"]
     stripped = keywords.strip()
 
@@ -315,7 +345,7 @@ async def _wiki_lookup(
     for query in _query_variants(stripped):
         for wiki_lang in order:
             url = await _wiki_summary(client, query, wiki_lang)
-            if url and _is_fair_use_poster(url):
+            if acceptable(url):
                 return PosterHit(url=url, source="wikipedia")
 
     # 2. Direct page-image lookup for pages that don't surface via REST
@@ -323,14 +353,14 @@ async def _wiki_lookup(
     for query in _query_variants(stripped):
         for wiki_lang in order:
             url = await _wiki_direct(client, query, wiki_lang)
-            if url and _is_fair_use_poster(url):
+            if acceptable(url):
                 return PosterHit(url=url, source="wikipedia")
 
     # 3. Fuzzy search — last resort when no exact page matches.
     for query in _query_variants(stripped):
         for wiki_lang in order:
             url = await _wiki_search(client, query, wiki_lang)
-            if url and _is_fair_use_poster(url):
+            if acceptable(url):
                 return PosterHit(url=url, source="wikipedia")
 
     # 4. "X vs Y" — try each half (useful for sports matchups without a

@@ -498,6 +498,45 @@ def build_router(state: Any) -> APIRouter:  # noqa: ANN401 — state is the main
 # ---------------------------------------------------------------------------
 
 
+async def _resolve_sport_art(posters: PosterResolver, entry: Any) -> str:  # noqa: ANN401
+    """Pick an image for a sport event card.
+
+    Strategy (all TMDB-free — TMDB has no sport match entries):
+      1. Try Wikipedia RU/EN on the Latin ``poster_keywords`` the model
+         provided ("Bayern Borussia Dortmund", "NBA Finals") with
+         Commons images allowed — gets us a team crest or league logo.
+      2. If keywords look like "X - Y" or "X vs Y", try each half
+         separately so at least one team's crest surfaces.
+      3. Give up with an empty string → card will be excluded from the
+         digest by the poster-mandatory dedupe step.
+    """
+    hint = (entry.poster_keywords or "").strip()
+    title = (entry.title or "").strip()
+
+    queries: list[str] = []
+    if hint:
+        queries.append(hint)
+    if title and title not in queries:
+        queries.append(title)
+    # split "X - Y" / "X vs Y" / "X — Y" so Barça vs Espanyol → Barça
+    for q in list(queries):
+        lower = q.lower()
+        for splitter in (" - ", " — ", " vs ", " – "):
+            if splitter in lower:
+                halves = [h.strip() for h in q.split(splitter, 1) if h.strip()]
+                queries.extend(halves)
+                break
+
+    for q in queries:
+        try:
+            hit = await posters.resolve(q, "ru", allow_commons=True)
+        except Exception:  # noqa: BLE001 — poster is cosmetic
+            continue
+        if hit:
+            return f"/api/ai/poster-image?src={quote(hit.url, safe='')}"
+    return ""
+
+
 async def _resolve_poster_for_title(
     posters: PosterResolver,
     title: str,
@@ -773,18 +812,15 @@ async def _hydrate_digest_posters(
     theme = digest.theme
 
     async def _resolve(entry: DigestEntry) -> DigestEntry:
-        # Sport: specific matches / races / championships are never in
-        # TMDB/Wiki — searching "Swimming Russia Cup" on TMDB matches
-        # figure-skating results and hands us a Hollywood figure-skater's
-        # poster. Skip the external lookup entirely for sport and go
-        # straight to the channel logo so the tile shows the broadcaster's
-        # recognisable brand.
+        # Sport: specific matches are not in TMDB, but Wikipedia has team
+        # crests and league logos on Commons (Barça, Bayern, RPL, UEFA,
+        # etc). Allow Commons through for sport so we can at least get
+        # club/event identity art. Cinema keeps the strict fair-use
+        # filter — Commons photos of actors make bad film posters.
         if theme == "sport":
-            url = f"/api/logo/{entry.channel_id}" if entry.channel_id else ""
+            url = await _resolve_sport_art(posters, entry)
         else:
-            url = await _resolve_poster_for_title(
-                posters, entry.title, entry.poster_keywords, lang
-            )
+            url = await _resolve_poster_for_title(posters, entry.title, entry.poster_keywords, lang)
         return DigestEntry(
             channel_id=entry.channel_id,
             channel_name=entry.channel_name,
@@ -798,12 +834,11 @@ async def _hydrate_digest_posters(
 
     hydrated = await asyncio.gather(*(_resolve(i) for i in digest.items))
 
-    # For cinema keep the poster-mandatory rule — it reliably strips
-    # series episodes ("Интерны. 57 с.") and talk-shows the model picks
-    # despite the filter. For sport we supplied a channel-logo fallback
-    # above, so every sport item already has a poster_url.
-    if theme == "cinema":
-        hydrated = [e for e in hydrated if e.poster_url]
+    # Poster mandatory for all themes. Cinema drops series / talk-shows
+    # that slipped the filter; sport drops events whose Wiki crest lookup
+    # failed. Better to show 6 solid cards than 9 with garbage imagery —
+    # users reported the channel-logo fallback for sport as "говно".
+    hydrated = [e for e in hydrated if e.poster_url]
 
     # Dedupe by normalized title — gpt sometimes surfaces the same film
     # from two channels in the same digest; we only want one card.
