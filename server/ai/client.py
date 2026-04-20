@@ -21,13 +21,21 @@ load_dotenv()
 class AIConfig:
     api_key: str
     model: str
+    digest_model: str
     enabled: bool
 
     @classmethod
     def from_env(cls) -> AIConfig:
         key = os.environ.get("OPENAI_API_KEY", "").strip()
         model = os.environ.get("OPENAI_MODEL", "gpt-5-mini").strip() or "gpt-5-mini"
-        return cls(api_key=key, model=model, enabled=bool(key))
+        # Digest runs non-interactively and just picks 10 items from a
+        # pre-filtered list — reasoning models are overkill and 40-60s is
+        # longer than Cloudflare's 100s edge timeout can tolerate on Free.
+        # Falls back to gpt-4o-mini, overridable via env.
+        digest_model = (
+            os.environ.get("OPENAI_DIGEST_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini"
+        )
+        return cls(api_key=key, model=model, digest_model=digest_model, enabled=bool(key))
 
 
 @lru_cache(maxsize=1)

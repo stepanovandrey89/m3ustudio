@@ -89,7 +89,7 @@ async def generate_digest(
 
     try:
         response = await client.chat.completions.create(
-            model=config.model,
+            model=config.digest_model,
             messages=[
                 {"role": "system", "content": digest_system(lang)},
                 {"role": "user", "content": user_prompt},
