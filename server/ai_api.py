@@ -464,13 +464,16 @@ async def _resolve_poster_for_title(
             hit = await posters.resolve(primary, lang)
         if hit is None and fallback:
             hit = await posters.resolve(fallback, lang)
-        url = hit.url if hit else ""
+        # Always return a proxied URL so the browser never talks directly to
+        # image.tmdb.org / upload.wikimedia.org (avoids CORS, TSPU/ISP
+        # blocks, and hides the CDN hostname from the client network).
+        proxied = f"/api/ai/poster-image?src={quote(hit.url, safe='')}" if hit else ""
         print(
             f"[poster] title='{title_clean[:60]}' hint='{latin_hint[:60]}' "
-            f"-> {'OK' if url else 'MISS'}",
+            f"-> {'OK' if proxied else 'MISS'}",
             flush=True,
         )
-        return url
+        return proxied
     except Exception as exc:  # noqa: BLE001 — poster is cosmetic
         print(f"[poster] error for '{title_clean[:60]}': {exc}", flush=True)
         return ""
