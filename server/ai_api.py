@@ -180,11 +180,24 @@ def build_router(state: Any) -> APIRouter:  # noqa: ANN401 — state is the main
             cinema_clean = _exclude_non_cinema(schedules)
             if cinema_clean:
                 schedules = cinema_clean
+        print(
+            f"[digest-debug] theme={theme_typed} schedules={len(schedules)} "
+            f"channels={len(main_channels)}",
+            flush=True,
+        )
         result = await generate_digest(client, cfg, schedules, theme_typed, lang)
+        print(
+            f"[digest-debug] theme={theme_typed} model_returned={len(result.items)} items",
+            flush=True,
+        )
         # Resolve every poster in parallel BEFORE responding / caching so
         # the frontend never renders a "blank card → flash of content"
         # when the browser plays catch-up on /api/ai/poster requests.
         result = await _hydrate_digest_posters(result, state.posters, lang)
+        print(
+            f"[digest-debug] theme={theme_typed} after_hydrate={len(result.items)} items",
+            flush=True,
+        )
         # Don't persist empty digests — a transient model glitch would otherwise
         # freeze an "empty" result on disk for the rest of the day, and the
         # frontend would keep serving it until the user hits refresh or the
@@ -501,28 +514,22 @@ def build_router(state: Any) -> APIRouter:  # noqa: ANN401 — state is the main
 
 
 async def _resolve_sport_art(posters: PosterResolver, entry: Any) -> str:  # noqa: ANN401
-    """Pick an image for a sport event card via TheSportsDB.
+    """Pick an image for a sport event card via Wikipedia.
 
-    TheSportsDB indexes real match posters, team crests and league logos
-    — none of which exist on TMDB. Strategy:
-      1. Search the event by Latin poster_keywords ("Bayern Munich vs
-         Borussia Dortmund", "Barcelona vs Espanyol") — many popular
-         matches have an official poster.
-      2. Fall back to the first / second team's crest for "X vs Y"
-         queries.
-      3. Fall back to the league / series logo ("Formula 1 Melbourne"
-         → Formula 1 series badge; "UFC Burns vs Malott" → UFC logo)
-         so per-event items without a specific poster still get recognised
-         branding rather than nothing.
-      4. If everything misses, return empty — the card gets dropped by
-         the poster-mandatory rule.
+    TheSportsDB test key got rate-limited (429) — production use needs
+    their Patreon-gated key. Back to Wikipedia with Commons allowed:
+    resolves team crests and league logos reliably and for free. Not as
+    rich as real match posters but consistent and no external rate limit.
+
+    Strategy:
+      1. Latin poster_keywords as-is ("Bayern Munich", "UFC" → crest/logo).
+      2. First / second half of an "X vs Y" split.
+      3. Cyrillic title as fallback.
     """
     hint = (entry.poster_keywords or "").strip()
     title = (entry.title or "").strip()
 
-    # Identify the "X vs Y" halves once and pass them to the resolver so
-    # a single look-up can try event → team A → team B in priority order.
-    def _split_halves(text: str) -> list[str]:
+    def _halves(text: str) -> list[str]:
         low = text.lower()
         for splitter in (" vs ", " - ", " — ", " – ", " v "):
             if splitter in low:
@@ -530,19 +537,26 @@ async def _resolve_sport_art(posters: PosterResolver, entry: Any) -> str:  # noq
                 return [text[:idx].strip(), text[idx + len(splitter) :].strip()]
         return []
 
-    queries: list[tuple[str, list[str]]] = []
+    queries: list[str] = []
     if hint:
-        queries.append((hint, _split_halves(hint)))
-    if title and title != hint:
-        queries.append((title, _split_halves(title)))
+        queries.append(hint)
+        queries.extend(_halves(hint))
+    if title and title not in queries:
+        queries.append(title)
+        queries.extend(h for h in _halves(title) if h not in queries)
 
-    for q, halves in queries:
+    for q in queries:
+        if not q:
+            continue
         try:
-            hit = await posters.resolve_sport(q, match_halves=halves or None)
-        except Exception:  # noqa: BLE001 — poster is cosmetic
+            hit = await posters.resolve(q, "ru", allow_commons=True)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[sport-art] error q={q!r}: {exc}", flush=True)
             continue
         if hit:
+            print(f"[sport-art] OK q={q!r} via {hit.source}", flush=True)
             return f"/api/ai/poster-image?src={quote(hit.url, safe='')}"
+    print(f"[sport-art] MISS title={title[:40]!r} tried={len(queries)}", flush=True)
     return ""
 
 

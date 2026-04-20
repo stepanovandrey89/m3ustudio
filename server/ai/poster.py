@@ -197,7 +197,17 @@ class PosterResolver:
             follow_redirects=True,
             headers={"User-Agent": "m3u-studio/0.7 (sport-lookup)"},
         ) as client:
-            hit = await _sportsdb_event(client, clean, self._sportsdb_key)
+            # Event search first — but TheSportsDB's ``strEvent`` is stored
+            # as "Team A vs Team B", so we must synthesise that form even
+            # when the caller's query has no explicit separator.
+            event_queries = [clean]
+            if match_halves and len(match_halves) >= 2:
+                event_queries.insert(0, f"{match_halves[0]} vs {match_halves[1]}")
+            hit: PosterHit | None = None
+            for eq in event_queries:
+                hit = await _sportsdb_event(client, eq, self._sportsdb_key)
+                if hit:
+                    break
             if hit is None and match_halves:
                 for half in match_halves:
                     hit = await _sportsdb_team(client, half, self._sportsdb_key)
@@ -652,13 +662,24 @@ async def _sportsdb_team(client: httpx.AsyncClient, name: str, api_key: str) -> 
     try:
         r = await client.get(url, params={"t": name})
         r.raise_for_status()
-    except httpx.HTTPError:
+    except httpx.HTTPError as exc:
+        print(f"[sportsdb-team] http-fail {name!r}: {exc}", flush=True)
         return None
-    teams = r.json().get("teams") or []
+    try:
+        data = r.json()
+    except Exception as exc:  # noqa: BLE001
+        print(f"[sportsdb-team] json-fail {name!r}: {exc}", flush=True)
+        return None
+    teams = data.get("teams") or []
     if not teams:
+        print(f"[sportsdb-team] no-teams {name!r} resp={len(r.content)}b", flush=True)
         return None
     t = teams[0]
     badge = t.get("strBadge") or t.get("strLogo")
+    print(
+        f"[sportsdb-team] {t.get('strTeam')!r} for {name!r} badge={'Y' if badge else 'N'}",
+        flush=True,
+    )
     if badge:
         return PosterHit(url=str(badge), source="sportsdb")
     return None
@@ -707,8 +728,12 @@ async def _sportsdb_league(client: httpx.AsyncClient, name: str, api_key: str) -
 _SPORTSDB_LEAGUE_MAP: dict[str, str] = {
     "формула 1": "Formula 1",
     "formula 1": "Formula 1",
+    "formula1": "Formula 1",
     "f1": "Formula 1",
     "формула 2": "Formula 2",
+    "formula 2": "Formula 2",
+    "формула 3": "Formula 2",
+    "formula 3": "Formula 2",
     "нхл": "NHL",
     "nhl": "NHL",
     "нба": "NBA",
@@ -716,32 +741,51 @@ _SPORTSDB_LEAGUE_MAP: dict[str, str] = {
     "кхл": "KHL",
     "khl": "KHL",
     "мхл": "MHL",
+    "mhl": "MHL",
     "рпл": "Russian Premier League",
+    "rpl": "Russian Premier League",
     "российская премьер-лига": "Russian Premier League",
+    "russian premier league": "Russian Premier League",
     "премьер-лига": "English Premier League",
     "premier league": "English Premier League",
     "ла лига": "Spanish La Liga",
+    "la liga": "Spanish La Liga",
     "чемпионат испании": "Spanish La Liga",
+    "кубок испании": "Spanish La Liga",
+    "copa del rey": "Spanish La Liga",
     "ligue 1": "French Ligue 1",
     "чемпионат франции": "French Ligue 1",
     "серия а": "Italian Serie A",
+    "serie a": "Italian Serie A",
     "чемпионат италии": "Italian Serie A",
     "бундеслига": "German Bundesliga",
+    "bundesliga": "German Bundesliga",
     "чемпионат германии": "German Bundesliga",
     "лига чемпионов": "UEFA Champions League",
     "champions league": "UEFA Champions League",
     "лига европы": "UEFA Europa League",
+    "europa league": "UEFA Europa League",
     "ufc": "UFC",
     "mma": "UFC",
     "смешанные единоборства": "UFC",
     "nascar": "NASCAR Cup Series",
     "наскар": "NASCAR Cup Series",
-    "moto gp": "Moto GP",
-    "motogp": "Moto GP",
+    "moto gp": "MotoGP",
+    "motogp": "MotoGP",
     "дартс": "Professional Darts",
+    "darts": "Professional Darts",
     "теннис": "ATP Tour",
+    "tennis": "ATP Tour",
     "atp": "ATP Tour",
     "wta": "WTA Tour",
+    "волейбол": "Russian Volleyball Super League",
+    "volleyball": "Russian Volleyball Super League",
+    "гандбол": "Handball-Bundesliga",
+    "handball": "Handball-Bundesliga",
+    "snl": "Swiss NL A",
+    "swiss national league": "Swiss NL A",
+    "чемпионат турции": "Turkish Super Lig",
+    "super lig": "Turkish Super Lig",
 }
 
 
