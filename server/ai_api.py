@@ -745,26 +745,41 @@ _THEME_KEYWORDS: dict[str, list[str]] = {
 }
 
 
+DIGEST_TARGET_ITEMS = 9
+
+
 async def _hydrate_digest_posters(
     digest: Any,  # noqa: ANN401
     posters: PosterResolver,
     lang: str,
 ) -> Any:  # noqa: ANN401
-    """Resolve poster URLs for every digest entry in parallel.
+    """Resolve poster URLs, deduplicate, ensure 9 items, return a Digest.
 
-    Runs AFTER the model picks items but BEFORE we return the JSON so the
-    client receives fully-formed cards with ``poster_url`` populated. Hits
-    the TMDB / Wikipedia cache so repeated requests for the same title
-    cost nothing. Failures silently fall through to ``""`` — a blank
-    poster is better than a failed card.
+    Pipeline (runs AFTER the model picks items, BEFORE we cache / send):
+      1. Parallel poster resolve via TMDB → Wiki (see ``_resolve_poster_for_title``).
+      2. For cinema, poster is mandatory — dropping talk-shows / news that
+         slipped the theme filter. For sport the channel logo is used as
+         fallback when TMDB has no specific-event poster (Bayern vs
+         Borussia has no TMDB entry but the channel has a crest).
+      3. Dedupe by lowercased title so the same film recommended from two
+         channels never shows twice.
+      4. Sort by start time — nearest first — and slice to 9.
     """
     from server.ai.digest import Digest, DigestEntry  # local import
 
     if not digest.items:
         return digest
 
+    theme = digest.theme
+
     async def _resolve(entry: DigestEntry) -> DigestEntry:
         url = await _resolve_poster_for_title(posters, entry.title, entry.poster_keywords, lang)
+        # Sport events (Bayern vs Borussia, NHL games) almost never have a
+        # specific poster on TMDB/Wiki. Falling back to the channel logo
+        # keeps every sport tile visually populated without faking an
+        # unrelated poster.
+        if not url and theme == "sport" and entry.channel_id:
+            url = f"/api/logo/{entry.channel_id}"
         return DigestEntry(
             channel_id=entry.channel_id,
             channel_name=entry.channel_name,
@@ -778,27 +793,34 @@ async def _hydrate_digest_posters(
 
     hydrated = await asyncio.gather(*(_resolve(i) for i in digest.items))
 
-    # Poster is mandatory for inclusion. Series episodes ("Интерны. 57 с."),
-    # sports broadcasts ("НАСКАР. 5-й этап"), talk-shows and news rarely
-    # have canonical TMDB/Wiki articles with a poster, while real feature
-    # films always resolve. This one rule cleans up the cinema digest far
-    # more reliably than any title-regex heuristic can.
-    with_posters = [e for e in hydrated if e.poster_url]
+    # For cinema keep the poster-mandatory rule — it reliably strips
+    # series episodes ("Интерны. 57 с.") and talk-shows the model picks
+    # despite the filter. For sport we supplied a channel-logo fallback
+    # above, so every sport item already has a poster_url.
+    if theme == "cinema":
+        hydrated = [e for e in hydrated if e.poster_url]
 
-    # Sort by start time — nearest first. The prompt asks for this order
-    # but gpt-4o-mini occasionally returns items in arrival/channel order,
-    # so enforce it server-side. Falls back gracefully for items missing
-    # a valid ISO timestamp.
+    # Dedupe by normalized title — gpt sometimes surfaces the same film
+    # from two channels in the same digest; we only want one card.
+    seen: set[str] = set()
+    unique: list[DigestEntry] = []
+    for entry in hydrated:
+        key = entry.title.strip().lower()
+        if key and key not in seen:
+            seen.add(key)
+            unique.append(entry)
+
+    # Sort by start time — nearest first.
     def _start_key(entry: DigestEntry) -> str:
         return entry.start or "9999"
 
-    hydrated_sorted = sorted(with_posters, key=_start_key)
+    sorted_items = sorted(unique, key=_start_key)
     return Digest(
         date=digest.date,
         theme=digest.theme,
         lang=digest.lang,
         generated_at=digest.generated_at,
-        items=tuple(hydrated_sorted),
+        items=tuple(sorted_items[:DIGEST_TARGET_ITEMS]),
     )
 
 

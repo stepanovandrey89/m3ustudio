@@ -93,14 +93,16 @@ async def generate_digest(
         else ""
     )
     count_ru = (
-        "ОБЯЗАТЕЛЬНО верни 9 пунктов. Если 9 одинаково хороших не набирается — "
-        "всё равно верни 9, добавив следующее лучшее. Пустой список только "
-        "когда в EPG реально ничего по теме нет.\n"
+        "Верни 12 уникальных пунктов (разные передачи, без повторов). "
+        "Сервер возьмёт из них лучшие 9 после проверки постеров, так что "
+        "запас из 12 нужен, чтобы после отсева осталось ровно 9 плиток. "
+        "Пустой список только когда в EPG реально ничего по теме нет.\n"
     )
     count_en = (
-        "MUST return 9 items. If 9 equally strong picks aren't available — "
-        "still return 9 by picking the next-best. Empty list only when the "
-        "EPG genuinely has nothing on-theme.\n"
+        "Return 12 unique items (no duplicates). The server picks the top 9 "
+        "after poster verification, so the extra 3 are a buffer to guarantee "
+        "a full 9-tile board. Empty list only if the EPG genuinely has "
+        "nothing on-theme.\n"
     )
     user_prompt = (
         (
@@ -161,7 +163,9 @@ async def generate_digest(
         theme=theme,
         lang=lang,
         generated_at=datetime.now(UTC).isoformat(),
-        items=items[:9],
+        # Keep up to 12 candidates from the model — _hydrate_digest_posters
+        # deduplicates + enforces poster presence + slices to the target 9.
+        items=items[:12],
     )
 
 
