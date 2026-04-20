@@ -116,18 +116,23 @@ def build_router(state: Any) -> APIRouter:  # noqa: ANN401 — state is the main
                 return JSONResponse({"cached": True, **cached.to_dict()})
 
         main_channels = _main_channels(state)
-        # Tight digest window: 149 channels × 6 programmes × 8h keeps the
-        # OpenAI input well under Cloudflare's 100s Free-plan edge timeout.
-        # Previously used 12h × max(12,future_hours) which blew past CF for
-        # reasoning models that spend ~40-60s "thinking" on a fat prompt.
         schedules = build_main_schedule(
             state.epg,
             main_channels,
             past_hours=0,
-            future_hours=8,
-            max_per_channel=6,
+            future_hours=12,
             only_upcoming=True,
         )
+        # Pre-narrow EPG to programmes that match the theme via title/desc
+        # keywords. Cuts prompt size 5-10x and keeps the OpenAI response
+        # under Cloudflare's 100s edge cap. Empty result falls back to the
+        # full slate so the model can still look at "assistant picks" for
+        # anything.
+        theme_keywords = _THEME_KEYWORDS.get(theme_typed, [])
+        if theme_keywords:
+            narrowed = _narrow_by_keywords(schedules, theme_keywords)
+            if narrowed:
+                schedules = narrowed
         result = await generate_digest(client, cfg, schedules, theme_typed, lang)
         # Don't persist empty digests — a transient model glitch would otherwise
         # freeze an "empty" result on disk for the rest of the day, and the
@@ -578,6 +583,59 @@ async def _tool_recommend(
         "blurb": blurb,
         "poster_url": poster_url,
     }
+
+
+_THEME_KEYWORDS: dict[str, list[str]] = {
+    "sport": [
+        "футбол", "хоккей", "баскетбол", "теннис", "волейбол", "бокс",
+        "единоборств", "регби", "лыжн", "биатлон", "гольф", "велоспорт",
+        "формула", "гонк", "мото", "наскар", "ралли", "снукер", "дартс",
+        "матч", "чемпионат", "кубок", "евролиг", "еврокубок", "премьер-лига",
+        "лига чемпион", "лига европ", "нба", "nba", "nhl", "кхл", "рпл",
+        "ufc", "mma", "wta", "atp", "бой ",
+        "football", "hockey", "basketball", "tennis", "soccer", "boxing",
+        "formula 1", "formula 2", "motogp", "premier league", "champions league",
+        "euroleague", "nascar", "grand prix", "world cup", "derby", "снооkер",
+        "трансляц",
+    ],
+    "cinema": [
+        "фильм", "сериал", "кино", "художествен", "драма", "комедия",
+        "боевик", "триллер", "детектив", "мелодрам", "фантастика",
+        "приключени", "вестерн", "ужасы", "хоррор", "нуар", "анимаци",
+        "мультфильм", "премьера",
+        "film", "movie", "tv series", "series", "drama", "comedy",
+        "thriller", "action", "horror", "sci-fi", "animated", "premiere",
+    ],
+}
+
+
+def _narrow_by_keywords(schedules: list, keywords: list[str]) -> list:
+    """Return a new schedule list keeping only programmes whose title or
+    description mentions one of ``keywords`` (case-insensitive).
+
+    Channels with zero matches are dropped entirely so the digest prompt
+    only carries on-theme content.
+    """
+    from server.ai.context import ChannelSchedule  # local import, tight loop
+
+    lowered = [k.lower() for k in keywords]
+    narrowed: list[ChannelSchedule] = []
+    for sch in schedules:
+        matching = tuple(
+            p
+            for p in sch.programmes
+            if any(k in p.title.lower() or k in p.description.lower() for k in lowered)
+        )
+        if matching:
+            narrowed.append(
+                ChannelSchedule(
+                    channel_id=sch.channel_id,
+                    channel_name=sch.channel_name,
+                    group=sch.group,
+                    programmes=matching,
+                )
+            )
+    return narrowed
 
 
 def _main_channels(state: Any) -> list:  # noqa: ANN401
