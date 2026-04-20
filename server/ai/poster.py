@@ -23,6 +23,11 @@ import httpx
 TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/w780"
 TMDB_SEARCH_URL = "https://api.themoviedb.org/3/search/multi"
 TMDB_IMAGES_URL = "https://api.themoviedb.org/3/{media_type}/{id}/images"
+# TheSportsDB — open sports database. Events, team crests, league
+# logos. Free key "3" is explicitly provided for demo / small-site use
+# in their API docs (https://www.thesportsdb.com/api.php). Swap in a
+# registered key via env if we ever hit their rate limit.
+SPORTSDB_BASE = "https://www.thesportsdb.com/api/v1/json"
 WIKI_SUMMARY_URL_TEMPLATE = "https://{lang}.wikipedia.org/api/rest_v1/page/summary/{title}"
 WIKI_API_URL_TEMPLATE = "https://{lang}.wikipedia.org/w/api.php"
 CACHE_TTL_SECONDS = 30 * 24 * 3600  # 30 days
@@ -51,6 +56,7 @@ class PosterResolver:
         self._mem: dict[str, tuple[float, PosterHit | None]] = self._load()
         self._lock = asyncio.Lock()
         self._tmdb_key = os.environ.get("TMDB_API_KEY", "").strip()
+        self._sportsdb_key = os.environ.get("SPORTSDB_API_KEY", "3").strip() or "3"
 
     @property
     def root(self) -> Path:
@@ -157,6 +163,63 @@ class PosterResolver:
                 return hit
 
         hit = await self._fetch(clean, lang, allow_commons=allow_commons)
+        async with self._lock:
+            self._mem[key] = (time.time(), hit)
+            self._save()
+        return hit
+
+    async def resolve_sport(
+        self, keywords: str, match_halves: list[str] | None = None
+    ) -> PosterHit | None:
+        """Sport-specific resolver. Uses TheSportsDB event/team endpoints
+        which index real match posters and team crests, not TMDB films.
+
+        ``match_halves`` is an optional pre-split list of opponents (e.g.
+        ``["Bayern Munich", "Borussia Dortmund"]``) — if the event lookup
+        misses we fall back to the first team's crest, and finally the
+        second team's crest.
+        """
+        clean = keywords.strip()
+        if not clean:
+            return None
+        # Cache key differs from film cache so sport-specific choices
+        # (crest vs. film poster) don't collide.
+        key = f"sport::{self._key(clean, 'ru')}"
+        cached = self._mem.get(key)
+        if cached:
+            ts, hit = cached
+            ttl = CACHE_TTL_SECONDS if hit else NEGATIVE_TTL_SECONDS
+            if time.time() - ts < ttl:
+                return hit
+
+        async with httpx.AsyncClient(
+            timeout=4.0,
+            follow_redirects=True,
+            headers={"User-Agent": "m3u-studio/0.7 (sport-lookup)"},
+        ) as client:
+            hit = await _sportsdb_event(client, clean, self._sportsdb_key)
+            if hit is None and match_halves:
+                for half in match_halves:
+                    hit = await _sportsdb_team(client, half, self._sportsdb_key)
+                    if hit:
+                        break
+            if hit is None:
+                # Some broadcasts have no specific event or teams we can
+                # find (F1 etap, NHL playoff game). Strip the per-event
+                # suffix and look for the league/series logo instead so
+                # "Формула 1. 1-й этап. Мельбурн" still surfaces the F1
+                # series logo and "UFC Burns vs Malott" falls back to
+                # UFC's crest.
+                for q in _sportsdb_league_variants(clean):
+                    hit = await _sportsdb_league(client, q, self._sportsdb_key)
+                    if hit:
+                        break
+            if hit is None:
+                # Last resort — full query as a team.
+                hit = await _sportsdb_team(client, clean, self._sportsdb_key)
+            if hit is not None:
+                await self.prefetch(hit.url, client=client)
+
         async with self._lock:
             self._mem[key] = (time.time(), hit)
             self._save()
@@ -557,3 +620,149 @@ async def _wiki_search(
             if isinstance(block, dict) and block.get("source"):
                 return str(block["source"])
     return None
+
+
+# ---------------------------------------------------------------------------
+# TheSportsDB helpers
+# ---------------------------------------------------------------------------
+
+
+async def _sportsdb_event(client: httpx.AsyncClient, query: str, api_key: str) -> PosterHit | None:
+    """Look up a specific match / fight / race on TheSportsDB."""
+    url = f"{SPORTSDB_BASE}/{api_key}/searchevents.php"
+    try:
+        r = await client.get(url, params={"e": query})
+        r.raise_for_status()
+    except httpx.HTTPError:
+        return None
+    events = r.json().get("event") or []
+    if not events:
+        return None
+    e = events[0]
+    for field in ("strPoster", "strThumb", "strBanner", "strSquare"):
+        v = e.get(field)
+        if v:
+            return PosterHit(url=str(v), source="sportsdb")
+    return None
+
+
+async def _sportsdb_team(client: httpx.AsyncClient, name: str, api_key: str) -> PosterHit | None:
+    """Look up a team / club / fighter by name; return their crest."""
+    url = f"{SPORTSDB_BASE}/{api_key}/searchteams.php"
+    try:
+        r = await client.get(url, params={"t": name})
+        r.raise_for_status()
+    except httpx.HTTPError:
+        return None
+    teams = r.json().get("teams") or []
+    if not teams:
+        return None
+    t = teams[0]
+    badge = t.get("strBadge") or t.get("strLogo")
+    if badge:
+        return PosterHit(url=str(badge), source="sportsdb")
+    return None
+
+
+async def _sportsdb_league(client: httpx.AsyncClient, name: str, api_key: str) -> PosterHit | None:
+    """Look up a league / series by name; return its badge or logo."""
+    url = f"{SPORTSDB_BASE}/{api_key}/search_all_leagues.php"
+    try:
+        r = await client.get(url, params={"l": name})
+        r.raise_for_status()
+    except httpx.HTTPError:
+        return None
+    data = r.json()
+    # API is inconsistent — sometimes {"countries": [..]}, sometimes [..]
+    leagues: list[dict[str, Any]] = []
+    if isinstance(data, dict):
+        leagues = data.get("countries") or data.get("leagues") or []
+    if not leagues:
+        # Fallback: all_leagues.php then filter
+        try:
+            r2 = await client.get(f"{SPORTSDB_BASE}/{api_key}/all_leagues.php")
+            r2.raise_for_status()
+            all_leagues = r2.json().get("leagues") or []
+        except httpx.HTTPError:
+            return None
+        name_lower = name.lower()
+        leagues = [
+            lg
+            for lg in all_leagues
+            if name_lower in (lg.get("strLeague") or "").lower()
+            or name_lower in (lg.get("strLeagueAlternate") or "").lower()
+        ]
+    if not leagues:
+        return None
+    lg = leagues[0]
+    for field in ("strPoster", "strBadge", "strLogo", "strTrophy"):
+        v = lg.get(field)
+        if v:
+            return PosterHit(url=str(v), source="sportsdb")
+    return None
+
+
+# Well-known league/series keyword → TheSportsDB search name. Covers the
+# common shows we see in the EPG; misses fall through to generic variants.
+_SPORTSDB_LEAGUE_MAP: dict[str, str] = {
+    "формула 1": "Formula 1",
+    "formula 1": "Formula 1",
+    "f1": "Formula 1",
+    "формула 2": "Formula 2",
+    "нхл": "NHL",
+    "nhl": "NHL",
+    "нба": "NBA",
+    "nba": "NBA",
+    "кхл": "KHL",
+    "khl": "KHL",
+    "мхл": "MHL",
+    "рпл": "Russian Premier League",
+    "российская премьер-лига": "Russian Premier League",
+    "премьер-лига": "English Premier League",
+    "premier league": "English Premier League",
+    "ла лига": "Spanish La Liga",
+    "чемпионат испании": "Spanish La Liga",
+    "ligue 1": "French Ligue 1",
+    "чемпионат франции": "French Ligue 1",
+    "серия а": "Italian Serie A",
+    "чемпионат италии": "Italian Serie A",
+    "бундеслига": "German Bundesliga",
+    "чемпионат германии": "German Bundesliga",
+    "лига чемпионов": "UEFA Champions League",
+    "champions league": "UEFA Champions League",
+    "лига европы": "UEFA Europa League",
+    "ufc": "UFC",
+    "mma": "UFC",
+    "смешанные единоборства": "UFC",
+    "nascar": "NASCAR Cup Series",
+    "наскар": "NASCAR Cup Series",
+    "moto gp": "Moto GP",
+    "motogp": "Moto GP",
+    "дартс": "Professional Darts",
+    "теннис": "ATP Tour",
+    "atp": "ATP Tour",
+    "wta": "WTA Tour",
+}
+
+
+def _sportsdb_league_variants(query: str) -> list[str]:
+    """Produce league/series search candidates from a messy EPG title.
+
+    Scans for known keywords (NHL, UFC, Формула 1, RPL, Champions League)
+    and yields the canonical TheSportsDB search name for each match.
+    Falls back to the first 2-3 tokens of the query so unknown leagues
+    get some chance.
+    """
+    lower = query.lower()
+    out: list[str] = []
+    seen: set[str] = set()
+    for needle, canonical in _SPORTSDB_LEAGUE_MAP.items():
+        if needle in lower and canonical not in seen:
+            seen.add(canonical)
+            out.append(canonical)
+    if not out:
+        # Generic fallback: first meaningful word(s)
+        tokens = [t for t in re.split(r"[^\wёЁ]+", query) if t]
+        if tokens:
+            out.append(" ".join(tokens[:2]))
+    return out

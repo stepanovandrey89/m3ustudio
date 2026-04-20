@@ -231,6 +231,8 @@ def build_router(state: Any) -> APIRouter:  # noqa: ANN401 — state is the main
             "image.tmdb.org",
             "upload.wikimedia.org",
             "commons.wikimedia.org",
+            "r2.thesportsdb.com",
+            "www.thesportsdb.com",
         }
         parsed = urlparse(src)
         if parsed.scheme != "https" or parsed.hostname not in allowed_hosts:
@@ -499,37 +501,44 @@ def build_router(state: Any) -> APIRouter:  # noqa: ANN401 — state is the main
 
 
 async def _resolve_sport_art(posters: PosterResolver, entry: Any) -> str:  # noqa: ANN401
-    """Pick an image for a sport event card.
+    """Pick an image for a sport event card via TheSportsDB.
 
-    Strategy (all TMDB-free — TMDB has no sport match entries):
-      1. Try Wikipedia RU/EN on the Latin ``poster_keywords`` the model
-         provided ("Bayern Borussia Dortmund", "NBA Finals") with
-         Commons images allowed — gets us a team crest or league logo.
-      2. If keywords look like "X - Y" or "X vs Y", try each half
-         separately so at least one team's crest surfaces.
-      3. Give up with an empty string → card will be excluded from the
-         digest by the poster-mandatory dedupe step.
+    TheSportsDB indexes real match posters, team crests and league logos
+    — none of which exist on TMDB. Strategy:
+      1. Search the event by Latin poster_keywords ("Bayern Munich vs
+         Borussia Dortmund", "Barcelona vs Espanyol") — many popular
+         matches have an official poster.
+      2. Fall back to the first / second team's crest for "X vs Y"
+         queries.
+      3. Fall back to the league / series logo ("Formula 1 Melbourne"
+         → Formula 1 series badge; "UFC Burns vs Malott" → UFC logo)
+         so per-event items without a specific poster still get recognised
+         branding rather than nothing.
+      4. If everything misses, return empty — the card gets dropped by
+         the poster-mandatory rule.
     """
     hint = (entry.poster_keywords or "").strip()
     title = (entry.title or "").strip()
 
-    queries: list[str] = []
-    if hint:
-        queries.append(hint)
-    if title and title not in queries:
-        queries.append(title)
-    # split "X - Y" / "X vs Y" / "X — Y" so Barça vs Espanyol → Barça
-    for q in list(queries):
-        lower = q.lower()
-        for splitter in (" - ", " — ", " vs ", " – "):
-            if splitter in lower:
-                halves = [h.strip() for h in q.split(splitter, 1) if h.strip()]
-                queries.extend(halves)
-                break
+    # Identify the "X vs Y" halves once and pass them to the resolver so
+    # a single look-up can try event → team A → team B in priority order.
+    def _split_halves(text: str) -> list[str]:
+        low = text.lower()
+        for splitter in (" vs ", " - ", " — ", " – ", " v "):
+            if splitter in low:
+                idx = low.find(splitter)
+                return [text[:idx].strip(), text[idx + len(splitter) :].strip()]
+        return []
 
-    for q in queries:
+    queries: list[tuple[str, list[str]]] = []
+    if hint:
+        queries.append((hint, _split_halves(hint)))
+    if title and title != hint:
+        queries.append((title, _split_halves(title)))
+
+    for q, halves in queries:
         try:
-            hit = await posters.resolve(q, "ru", allow_commons=True)
+            hit = await posters.resolve_sport(q, match_halves=halves or None)
         except Exception:  # noqa: BLE001 — poster is cosmetic
             continue
         if hit:
