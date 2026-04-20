@@ -507,18 +507,24 @@ async def _resolve_poster_for_title(
     """
     title_clean = (title or "").strip()
     latin_hint = (poster_keywords or "").strip()
-    # Russian films live on Wikipedia RU — querying by the Cyrillic title
-    # lands on the canonical article and its official poster. TMDB
-    # guesses Brad Pitt "Brothers" for "Брат" etc. So when the title is
-    # Cyrillic put it first; Latin hint stays as a fallback for global
-    # titles that only TMDB knows well.
-    cyrillic_title = any("\u0400" <= c <= "\u04ff" for c in title_clean)
-    if cyrillic_title:
-        primary = title_clean
-        fallback = latin_hint if latin_hint and latin_hint.lower() != title_clean.lower() else ""
+    # Signal routing: the model supplies Latin ``poster_keywords`` only for
+    # FOREIGN films (Hollywood titles, sports events). Russian films usually
+    # arrive with no Latin hint.
+    #   * useful Latin hint → foreign film → TMDB via Latin query
+    #   * no Latin hint      → probably Russian → Wiki via Cyrillic title
+    # ``_fetch`` internally orders providers (TMDB-first for Latin queries,
+    # Wiki-first for Cyrillic), so both paths land on the right source.
+    has_useful_latin = (
+        bool(latin_hint)
+        and latin_hint.lower() != title_clean.lower()
+        and any(c.isascii() and c.isalpha() for c in latin_hint)
+    )
+    if has_useful_latin:
+        primary = latin_hint
+        fallback = title_clean
     else:
-        primary = latin_hint if latin_hint else title_clean
-        fallback = title_clean if latin_hint and latin_hint.lower() != title_clean.lower() else ""
+        primary = title_clean
+        fallback = latin_hint if latin_hint and latin_hint != title_clean else ""
     try:
         hit = None
         if primary:
