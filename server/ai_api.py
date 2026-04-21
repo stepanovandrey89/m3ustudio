@@ -891,10 +891,29 @@ _EPG_TAIL_RE = re.compile(
     re.IGNORECASE,
 )
 _EPG_PARENS_RE = re.compile(r"\s*\([^)]{1,60}\)\s*$")
+# Parens that look like city / location hints — single capitalised word
+# or hyphenated compound ("Санкт-Петербург", "Новосибирск", "Нижний
+# Новгород"). Preserve these on the half so volleyball / basketball
+# team names keep their city — critical for "Зенит (Санкт-Петербург)"
+# vs "Зенит (Казань)" disambiguation.
+# Character class covers Cyrillic uppercase+lowercase+ё plus Latin A-z
+# and a literal hyphen so "Санкт-Петербург" / "Нижний Новгород" match
+# fully. The previous regex omitted uppercase inside the word and
+# missed hyphenated compounds where the part after the hyphen starts
+# with a capital (Санкт-Петербург).
+_EPG_CITY_PAREN_RE = re.compile(
+    r"\s*\(([А-ЯЁA-Z][А-ЯЁа-яёA-Za-z-]+(?:\s+[А-ЯЁA-Z][А-ЯЁа-яёA-Za-z-]+)?)\)\s*$"
+)
 
 
 def _strip_epg_tail(s: str) -> str:
-    """Remove trailing broadcast markers + commentator-name parentheses."""
+    """Remove trailing broadcast markers + commentator-name parentheses.
+
+    City hints like ``(Санкт-Петербург)`` / ``(Новосибирск)`` are
+    preserved by inlining — the paren is dropped but the city joins
+    the team name with a space, so volleyball / basketball team
+    canonicals still have the location signal downstream.
+    """
     s = s.strip()
     prev = ""
     # Loop until stable — some titles stack "(…) — Трансляция" in either
@@ -902,10 +921,67 @@ def _strip_epg_tail(s: str) -> str:
     while s and s != prev:
         prev = s
         s = _EPG_TAIL_RE.sub("", s).strip()
-        s = _EPG_PARENS_RE.sub("", s).strip()
-    # Also strip outer straight + fancy quotes that the EPG source
-    # wraps around team names.
-    return s.strip('"«»\'').strip()
+        # Before the generic parens strip, try to INLINE a city hint —
+        # "Зенит (Санкт-Петербург)" → "Зенит Санкт-Петербург" — so the
+        # canonical lookup downstream can disambiguate multi-city clubs.
+        city_match = _EPG_CITY_PAREN_RE.search(s)
+        if city_match:
+            s = (s[: city_match.start()].rstrip() + " " + city_match.group(1)).strip()
+        else:
+            s = _EPG_PARENS_RE.sub("", s).strip()
+    # Strip ALL straight / fancy quotes — both the outer pair the EPG
+    # source wraps around team names AND any inline ones left after
+    # the city-inline step ("Локомотив" + (Новосибирск) merges into
+    # '"Локомотив" Новосибирск', which should read "Локомотив
+    # Новосибирск" for the canonical lookup).
+    s = re.sub(r'[\"«»‘’“”\']', "", s).strip()
+    # Collapse any double spaces left over.
+    return re.sub(r"\s{2,}", " ", s)
+
+
+_RU_VOLLEYBALL_CLUB_CANONICAL: dict[str, tuple[str, ...]] = {
+    # Major Russian volleyball clubs. Many names overlap with football
+    # (Зенит, Локомотив, Динамо, Спартак); volley queries must pick the
+    # right volleyball article, not the football one. Bare "Зенит" on
+    # ru.wiki routes to the FOOTBALL club — explicit
+    # "(волейбольный клуб, <city>)" disambiguation resolves that.
+    "зенит санкт-петербург": (
+        "Зенит (волейбольный клуб, Санкт-Петербург)",
+        "ВК Зенит Санкт-Петербург",
+    ),
+    "зенит-санкт-петербург": (
+        "Зенит (волейбольный клуб, Санкт-Петербург)",
+        "ВК Зенит Санкт-Петербург",
+    ),
+    "зенит казань": ("Зенит (волейбольный клуб, Казань)", "ВК Зенит Казань"),
+    "зенит-казань": ("Зенит (волейбольный клуб, Казань)", "ВК Зенит Казань"),
+    "зенит": ("Зенит (волейбольный клуб, Санкт-Петербург)", "ВК Зенит"),
+    "локомотив новосибирск": (
+        "Локомотив (волейбольный клуб, Новосибирск)",
+        "ВК Локомотив Новосибирск",
+    ),
+    "локомотив": ("ВК Локомотив",),
+    "динамо москва": ("Динамо (волейбольный клуб, Москва)", "ВК Динамо Москва"),
+    "динамо краснодар": (
+        "Динамо (волейбольный клуб, Краснодар)",
+        "ВК Динамо Краснодар",
+    ),
+    "динамо": ("ВК Динамо",),
+    "белогорье": ("Белогорье (волейбольный клуб)", "ВК Белогорье"),
+    "белогорье белгород": ("Белогорье (волейбольный клуб)", "ВК Белогорье"),
+    "факел новый уренгой": (
+        "Факел (волейбольный клуб)",
+        "ВК Факел Новый Уренгой",
+    ),
+    "факел": ("Факел (волейбольный клуб)", "ВК Факел"),
+    "урал уфа": ("Урал (волейбольный клуб)", "ВК Урал"),
+    "урал": ("Урал (волейбольный клуб)", "ВК Урал"),
+    "газпром-югра": ("Газпром-Югра", "ВК Газпром-Югра"),
+    "нова": ("Нова (волейбольный клуб)", "ВК Нова"),
+    "енисей": ("Енисей (волейбольный клуб)", "ВК Енисей"),
+    "югра-самотлор": ("Югра-Самотлор", "ВК Югра-Самотлор"),
+    "кузбасс": ("Кузбасс (волейбольный клуб)", "ВК Кузбасс"),
+}
 
 
 async def _resolve_sport_art(posters: PosterResolver, entry: Any) -> str:  # noqa: ANN401
@@ -922,7 +998,12 @@ async def _resolve_sport_art(posters: PosterResolver, entry: Any) -> str:  # noq
     """
     hint = (entry.poster_keywords or "").strip()
     title = (entry.title or "").strip()
-    combined = f"{title} {hint}".lower()
+    # Channel name is a strong sport-context signal ("Матч! Футбол",
+    # "КХЛ ТВ", "Волейбол") — include it in the combined string so the
+    # is_football / is_hockey / is_volley detectors below can latch onto
+    # the right sport even when the EPG title / hint doesn't spell it out.
+    channel_name = getattr(entry, "channel_name", "") or ""
+    combined = f"{title} {hint} {channel_name}".lower()
 
     def _halves(text: str) -> list[str]:
         low = text.lower()
@@ -994,30 +1075,66 @@ async def _resolve_sport_art(posters: PosterResolver, entry: Any) -> str:  # noq
                 "мир российская",
                 "российская премьер",
                 "рпл",
+                "матч футбол",
+                "матч! футбол",
             )
         )
-        is_hockey = any(kw in combined for kw in ("хоккей", "hockey", "nhl", "кхл", "snl"))
-        # Sport-aware canonical lookup: hockey context picks the ХК/HC
-        # article for ambiguous names like "Спартак" (which has both an
-        # FC and an HC club), football context picks ФК/FC.
+        is_hockey = any(
+            kw in combined
+            for kw in (
+                "хоккей",
+                "hockey",
+                "nhl",
+                "кхл",
+                "snl",
+                "матч хоккей",
+                "матч! хоккей",
+                "хоккейная",
+            )
+        )
+        is_volley = any(
+            kw in combined
+            for kw in (
+                "волейбол",
+                "volleyball",
+                "суперлига россии по волейболу",
+                "русская волейбольная",
+            )
+        )
+        is_basket = any(
+            kw in combined
+            for kw in (
+                "баскетбол",
+                "basketball",
+                "nba",
+                "евролига",
+                "единая лига",
+            )
+        )
         lkey = n.lower()
+
+        # Sport-specific canonical pass — pick the article that matches
+        # the sport context so ambiguous names ("Зенит" / "Локомотив" /
+        # "Динамо" exist in football, hockey, AND volleyball) land on
+        # the right article.
+        if is_volley:
+            volley_canon = _RU_VOLLEYBALL_CLUB_CANONICAL.get(lkey)
+            if volley_canon:
+                out.extend(volley_canon)
         if is_hockey:
             hockey_canon = _RU_HOCKEY_CLUB_CANONICAL.get(lkey)
             if hockey_canon:
                 out.extend(hockey_canon)
         football_canon = _RU_CLUB_CANONICAL.get(lkey)
-        if football_canon and not is_hockey:
+        # Only fall through to the football canonical when the sport is
+        # explicitly football OR no sport has been identified. If the
+        # context is volleyball / basketball / hockey, a football crest
+        # is the WRONG answer — hold it back entirely rather than
+        # offering it as a "fallback".
+        if football_canon and not (is_hockey or is_volley or is_basket):
             out.extend(football_canon)
-        elif football_canon and is_hockey:
-            # Keep football canonical as late fallback — better than the
-            # bare name producing a random film/portrait.
-            out.extend(v for v in football_canon if v not in out)
         out.append(n)
-        is_volley = any(kw in combined for kw in ("волейбол", "volleyball"))
-        is_basket = any(kw in combined for kw in ("баскетбол", "basketball", "nba"))
-        # For names we don't have in the curated map, still try Russian
-        # abbreviation prefixes (ФК/ХК/ВК/БК) — works for foreign clubs
-        # with ru.wiki articles like "ФК Барселона", "ФК Реал Мадрид".
+        # Russian abbreviation prefixes for names we don't have mapped.
         if is_football:
             out.append(f"ФК {n}")
         if is_hockey:
