@@ -690,12 +690,37 @@ _RU_CLUB_CANONICAL: dict[str, tuple[str, ...]] = {
     "real madrid": ("Real Madrid CF", "Реал Мадрид"),
     "реал мадрид": ("Реал Мадрид", "Real Madrid CF"),
     "real": ("Real Madrid CF",),
+    "реал": ("Реал Мадрид", "Real Madrid CF"),
     "atletico": ("Atlético Madrid", "Атлетико Мадрид"),
     "атлетико": ("Атлетико Мадрид", "Atlético Madrid"),
     "sevilla": ("Sevilla FC", "Севилья"),
     "севилья": ("Севилья", "Sevilla FC"),
     "valencia": ("Valencia CF", "Валенсия"),
+    "валенсия": ("Валенсия (футбольный клуб)", "Valencia CF"),
     "bilbao": ("Athletic Bilbao", "Атлетик Бильбао"),
+    "atletic bilbao": ("Athletic Bilbao", "Атлетик Бильбао"),
+    "girona": ("Girona FC", "Жирона (футбольный клуб)"),
+    "жирона": ("Жирона (футбольный клуб)", "Girona FC"),
+    "betis": ("Real Betis", "Реал Бетис"),
+    "бетис": ("Реал Бетис", "Real Betis"),
+    "espanyol": ("RCD Espanyol", "Эспаньол"),
+    "эспаньол": ("Эспаньол", "RCD Espanyol"),
+    "villarreal": ("Villarreal CF", "Вильярреал"),
+    "вильярреал": ("Вильярреал", "Villarreal CF"),
+    "getafe": ("Getafe CF", "Хетафе"),
+    "хетафе": ("Хетафе", "Getafe CF"),
+    "rayo": ("Rayo Vallecano", "Райо Вальекано"),
+    "райо": ("Райо Вальекано", "Rayo Vallecano"),
+    "osasuna": ("CA Osasuna", "Осасуна"),
+    "осасуна": ("Осасуна", "CA Osasuna"),
+    "alaves": ("Deportivo Alavés", "Алавес"),
+    "алавес": ("Алавес", "Deportivo Alavés"),
+    "mallorca": ("RCD Mallorca", "Мальорка (футбольный клуб)"),
+    "мальорка": ("Мальорка (футбольный клуб)", "RCD Mallorca"),
+    "celta": ("RC Celta de Vigo", "Сельта"),
+    "сельта": ("Сельта", "RC Celta de Vigo"),
+    "las palmas": ("UD Las Palmas", "Лас-Пальмас (футбольный клуб)"),
+    "лас-пальмас": ("Лас-Пальмас (футбольный клуб)", "UD Las Palmas"),
     "manchester united": ("Manchester United F.C.", "Манчестер Юнайтед"),
     "manchester city": ("Manchester City F.C.", "Манчестер Сити"),
     "liverpool": ("Liverpool F.C.", "Ливерпуль"),
@@ -748,6 +773,34 @@ _RU_CLUB_CANONICAL: dict[str, tuple[str, ...]] = {
 }
 
 
+# EPG broadcast / commentary trailers that the per-sport splitter
+# should drop from the team halves. Without this, lookups for names
+# that sit next to the " — " separator ("Жирона — Трансляция",
+# "Реал Мадрид — Прямой эфир") fall to fuzzy Wikipedia search and
+# return the wrong article ("Трансляция" is a page of its own).
+_EPG_TAIL_RE = re.compile(
+    r"\s*[—–-]\s*(?:трансляц\S*|прямой эфир|прямая трансляция|в записи|повтор\S*|repeat|live)"
+    r"\s*$",
+    re.IGNORECASE,
+)
+_EPG_PARENS_RE = re.compile(r"\s*\([^)]{1,60}\)\s*$")
+
+
+def _strip_epg_tail(s: str) -> str:
+    """Remove trailing broadcast markers + commentator-name parentheses."""
+    s = s.strip()
+    prev = ""
+    # Loop until stable — some titles stack "(…) — Трансляция" in either
+    # order so a single pass isn't enough.
+    while s and s != prev:
+        prev = s
+        s = _EPG_TAIL_RE.sub("", s).strip()
+        s = _EPG_PARENS_RE.sub("", s).strip()
+    # Also strip outer straight + fancy quotes that the EPG source
+    # wraps around team names.
+    return s.strip('"«»\'').strip()
+
+
 async def _resolve_sport_art(posters: PosterResolver, entry: Any) -> str:  # noqa: ANN401
     """Pick an image for a sport event card via Wikipedia.
 
@@ -777,6 +830,13 @@ async def _resolve_sport_art(posters: PosterResolver, entry: Any) -> str:  # noq
                 # Russian ("Хоккей. КХЛ. Ак Барс") and Latin hints.
                 if "." in left:
                     left = left.rsplit(".", 1)[-1].strip()
+                # Strip broadcast/commentary trailers that stick to the
+                # right half: "… — Трансляция", "Прямой эфир", "(Куинтон
+                # Гриценко)", "(комментирует …)". Without this, canonical
+                # lookup for "Жирона — Трансляция" falls straight to
+                # fuzzy Wikipedia search and lands on random pages.
+                right = _strip_epg_tail(right)
+                left = _strip_epg_tail(left)
                 return [left, right]
         return []
 
@@ -872,6 +932,40 @@ async def _resolve_sport_art(posters: PosterResolver, entry: Any) -> str:  # noq
             continue
         if hit:
             print(f"[sport-art] OK q={q!r} via {hit.source}", flush=True)
+            return f"/api/ai/poster-image?src={quote(hit.url, safe='')}"
+
+    # TheSportsDB fallback — official team crests + league badges. Kicks in
+    # when Wikipedia returns nothing OR the top-hit was a bad fuzzy match.
+    # ``resolve_sport`` internally tries event → team → league in that
+    # order, using the halves we already extracted so matchup pages hit
+    # the right home/away crest instead of the league icon.
+    sportsdb_queries: list[str] = []
+    if halves:
+        sportsdb_queries.append(" vs ".join(halves))
+    for half in halves:
+        if half and half not in sportsdb_queries:
+            sportsdb_queries.append(half)
+    for key in sorted(_SPORTSDB_LEAGUE_MAP, key=len, reverse=True):
+        if key in combined:
+            canonical = _SPORTSDB_LEAGUE_MAP[key]
+            if canonical not in sportsdb_queries:
+                sportsdb_queries.append(canonical)
+            break
+    if hint and hint not in sportsdb_queries:
+        sportsdb_queries.append(hint)
+    if title and title not in sportsdb_queries:
+        sportsdb_queries.append(title)
+
+    for q in sportsdb_queries:
+        if not q:
+            continue
+        try:
+            hit = await posters.resolve_sport(q, match_halves=halves or None)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[sport-sportsdb] error q={q!r}: {exc}", flush=True)
+            continue
+        if hit:
+            print(f"[sport-sportsdb] OK q={q!r}", flush=True)
             return f"/api/ai/poster-image?src={quote(hit.url, safe='')}"
 
     # TMDB TV fallback — docuseries about a team/league give reasonable
