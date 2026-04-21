@@ -51,8 +51,8 @@ const digestInflight = new Map<string, Promise<DigestResponse>>()
 // (new required field, strict quality rules, etc). Old browser caches
 // won't match the new key and will be ignored — the user gets fresh
 // data automatically without needing a hard refresh.
-const CACHE_STORAGE_PREFIX = 'm3u_digest_v3:'
-const OLD_CACHE_PREFIXES = ['m3u_digest_v1:']
+const CACHE_STORAGE_PREFIX = 'm3u_digest_v4:'
+const OLD_CACHE_PREFIXES = ['m3u_digest_v1:', 'm3u_digest_v3:']
 
 function cacheKey(theme: DigestTheme, lang: string): string {
   return `${theme}::${lang}`
@@ -456,7 +456,15 @@ function DigestCard({
     lang,
     entry.poster_url ? '' : entry.poster_keywords || '',
   )
-  const posterUrl = entry.poster_url || poster?.url || null
+  const serverPoster = entry.poster_url || poster?.url || null
+  // Track image-load failures so a broken poster URL (TMDB / Wiki /
+  // TheSportsDB CDN 404, blocked by the client's network, etc.) falls
+  // through to the blurred channel-logo backdrop instead of leaving the
+  // card visually empty. Without this the <img> is hidden via onError
+  // and the card shows only the gradient accent — user reads that as
+  // "no poster".
+  const [posterFailed, setPosterFailed] = useState(false)
+  const posterUrl = posterFailed ? null : serverPoster
   const now = useNow(30_000)
   const countdown = formatCountdown(entry.start, now, lang)
   // Programme phase drives which actions the card offers:
@@ -513,9 +521,7 @@ function DigestCard({
             aria-hidden
             className="absolute inset-0 h-full w-full scale-[1.02] object-cover opacity-70 transition-opacity duration-500"
             loading="lazy"
-            onError={(e) => {
-              ;(e.currentTarget as HTMLImageElement).style.display = 'none'
-            }}
+            onError={() => setPosterFailed(true)}
           />
         ) : (
           <img

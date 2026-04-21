@@ -45,12 +45,12 @@ rsync -az --delete-after \
   --exclude='dist/' \
   --exclude='build/' \
   --exclude='.env' \
-  --exclude='logos_cache/' \
-  --exclude='epg_cache/' \
-  --exclude='ai_cache/' \
-  --exclude='recordings/' \
-  --exclude='state.json' \
-  --exclude='plans.json' \
+  --exclude='/logos_cache/' \
+  --exclude='/epg_cache/' \
+  --exclude='/ai_cache/' \
+  --exclude='/recordings/' \
+  --exclude='/state.json' \
+  --exclude='/plans.json' \
   ./ "$HOST:$REMOTE_DIR/"
 
 echo "→ installing Python + npm deps on remote"

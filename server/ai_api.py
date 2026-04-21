@@ -619,6 +619,10 @@ _SPORT_LEAGUE_WIKI_MAP: dict[str, str] = {
     "формула 3": "Формула-3",
     "ufc": "Ultimate Fighting Championship",
     "motogp": "MotoGP",
+    "moto gp": "MotoGP",
+    "мото гп": "MotoGP",
+    "moto2": "Moto2",
+    "moto3": "Moto3",
     "nascar": "NASCAR",
     "наскар": "NASCAR",
     "волейбол чемпионат россии": "Суперлига России по волейболу среди мужчин",
@@ -760,15 +764,43 @@ _RU_CLUB_CANONICAL: dict[str, tuple[str, ...]] = {
     "boruss": ("Borussia Dortmund", "Боруссия Дортмунд"),
     "leverkusen": ("Bayer 04 Leverkusen", "Байер 04"),
     "juventus": ("Juventus F.C.", "Ювентус"),
+    "ювентус": ("Ювентус", "Juventus F.C."),
     "милан": ("Милан (футбольный клуб)", "A.C. Milan"),
     "milan": ("A.C. Milan", "Милан (футбольный клуб)"),
     "inter": ("Inter Milan", "Интернационале"),
     "интер": ("Интернационале", "Inter Milan"),
-    "napoli": ("S.S.C. Napoli", "Наполи"),
+    "napoli": ("S.S.C. Napoli", "Наполи (футбольный клуб)"),
+    "наполи": ("Наполи (футбольный клуб)", "S.S.C. Napoli"),
     "roma": ("A.S. Roma", "Рома (футбольный клуб)"),
-    "lazio": ("S.S. Lazio", "Лацио"),
-    "fiorentina": ("ACF Fiorentina", "Фиорентина"),
-    "lecce": ("U.S. Lecce", "Лечче"),
+    "рома": ("Рома (футбольный клуб)", "A.S. Roma"),
+    "lazio": ("S.S. Lazio", "Лацио (футбольный клуб)"),
+    "лацио": ("Лацио (футбольный клуб)", "S.S. Lazio"),
+    "fiorentina": ("ACF Fiorentina", "Фиорентина (футбольный клуб)"),
+    "фиорентина": ("Фиорентина (футбольный клуб)", "ACF Fiorentina"),
+    "lecce": ("U.S. Lecce", "Лечче (футбольный клуб)"),
+    "лечче": ("Лечче (футбольный клуб)", "U.S. Lecce"),
+    "atalanta": ("Atalanta B.C.", "Аталанта"),
+    "аталанта": ("Аталанта", "Atalanta B.C."),
+    "torino": ("Torino F.C.", "Торино"),
+    "торино": ("Торино", "Torino F.C."),
+    "bologna": ("Bologna F.C. 1909", "Болонья (футбольный клуб)"),
+    "болонья": ("Болонья (футбольный клуб)", "Bologna F.C. 1909"),
+    "udinese": ("Udinese Calcio", "Удинезе"),
+    "удинезе": ("Удинезе", "Udinese Calcio"),
+    "verona": ("Hellas Verona F.C.", "Эллас Верона"),
+    "верона": ("Эллас Верона", "Hellas Verona F.C."),
+    "genoa": ("Genoa C.F.C.", "Дженоа"),
+    "дженоа": ("Дженоа", "Genoa C.F.C."),
+    "parma": ("Parma Calcio 1913", "Парма (футбольный клуб)"),
+    "парма": ("Парма (футбольный клуб)", "Parma Calcio 1913"),
+    "como": ("Como 1907", "Комо (футбольный клуб)"),
+    "комо": ("Комо (футбольный клуб)", "Como 1907"),
+    "empoli": ("Empoli F.C.", "Эмполи"),
+    "эмполи": ("Эмполи", "Empoli F.C."),
+    "cagliari": ("Cagliari Calcio", "Кальяри"),
+    "кальяри": ("Кальяри", "Cagliari Calcio"),
+    "monza": ("A.C. Monza", "Монца (футбольный клуб)"),
+    "монца": ("Монца (футбольный клуб)", "A.C. Monza"),
     "psg": ("Paris Saint-Germain F.C.", "Пари Сен-Жермен"),
     "paris": ("Paris Saint-Germain F.C.",),
     "marseille": ("Olympique de Marseille", "Олимпик Марсель"),
@@ -885,7 +917,35 @@ async def _resolve_sport_art(posters: PosterResolver, entry: Any) -> str:  # noq
         out: list[str] = []
         is_football = any(
             kw in combined
-            for kw in ("футбол", "football", "soccer", "premier", "liga", "serie", "bundesliga")
+            for kw in (
+                "футбол",
+                "football",
+                "soccer",
+                "premier",
+                "liga",
+                "ла лига",
+                "serie",
+                "серия а",
+                "bundesliga",
+                "бундеслига",
+                "ligue",
+                "лига 1",
+                "чемпионат италии",
+                "чемпионат испании",
+                "чемпионат франции",
+                "чемпионат германии",
+                "чемпионат англии",
+                "чемпионат турции",
+                "super lig",
+                "суперлига турции",
+                "кубок испании",
+                "кубок франции",
+                "кубок германии",
+                "кубок англии",
+                "мир российская",
+                "российская премьер",
+                "рпл",
+            )
         )
         is_hockey = any(kw in combined for kw in ("хоккей", "hockey", "nhl", "кхл", "snl"))
         # Sport-aware canonical lookup: hockey context picks the ХК/HC
@@ -919,79 +979,93 @@ async def _resolve_sport_art(posters: PosterResolver, entry: Any) -> str:  # noq
             out.append(f"БК {n}")
         return out
 
-    queries: list[str] = []
-
-    # 1. Club crests FIRST — for a real matchup ("Спартак — Локомотив")
-    # we want the home team's crest, not the league logo. The canonical
-    # map gives full-article titles that reliably return the crest image
-    # via Wikipedia's summary endpoint.
     halves = _halves(hint) or _halves(title)
+
+    # Phase A — Wiki club canonicals for halves. For a real matchup
+    # ("Спартак — Локомотив", "Наполи — Лацио") the canonical map
+    # returns full article titles ("ФК Спартак Москва", "Наполи
+    # (футбольный клуб)") that reliably land on the crest.
+    club_queries: list[str] = []
     for half in halves:
         for variant in _club_variants(half):
-            if variant and variant not in queries:
-                queries.append(variant)
-
-    # 2. League logo — fallback when there are no halves (F1 race, UFC
-    # numbered card, tournament standings show) or when no half resolved
-    # to a club article. Longest key first so "russian premier league"
-    # beats the bare "premier league".
-    for key in sorted(_SPORT_LEAGUE_WIKI_MAP, key=len, reverse=True):
-        if key in combined:
-            article = _SPORT_LEAGUE_WIKI_MAP[key]
-            if article not in queries:
-                queries.append(article)
-            break
-
-    # 3. Raw fallbacks — original hint, original title.
-    if hint and hint not in queries:
-        queries.append(hint)
-    if title and title not in queries:
-        queries.append(title)
-
-    for q in queries:
-        if not q:
-            continue
+            if variant and variant not in club_queries:
+                club_queries.append(variant)
+    for q in club_queries:
         try:
             hit = await posters.resolve(q, "ru", allow_commons=True)
         except Exception as exc:  # noqa: BLE001
             print(f"[sport-art] error q={q!r}: {exc}", flush=True)
             continue
         if hit:
-            print(f"[sport-art] OK q={q!r} via {hit.source}", flush=True)
+            print(f"[sport-art] OK (club) q={q!r} via {hit.source}", flush=True)
             return f"/api/ai/poster-image?src={quote(hit.url, safe='')}"
 
-    # TheSportsDB fallback — official team crests + league badges. Kicks in
-    # when Wikipedia returns nothing OR the top-hit was a bad fuzzy match.
-    # ``resolve_sport`` internally tries event → team → league in that
-    # order, using the halves we already extracted so matchup pages hit
-    # the right home/away crest instead of the league icon.
-    sportsdb_queries: list[str] = []
-    if halves:
-        sportsdb_queries.append(" vs ".join(halves))
-    for half in halves:
-        if half and half not in sportsdb_queries:
-            sportsdb_queries.append(half)
-    for key in sorted(_SPORTSDB_LEAGUE_MAP, key=len, reverse=True):
+    # Phase B — league match. TheSportsDB FIRST (official league badges),
+    # Wiki article as fallback (lead image is often the wrong photo — a
+    # specific car, a generic stadium — so it's a weaker signal). Longest
+    # key first so "russian premier league" beats "premier league".
+    matched_wiki: str | None = None
+    matched_sportsdb: str | None = None
+    for key in sorted(_SPORT_LEAGUE_WIKI_MAP, key=len, reverse=True):
         if key in combined:
-            canonical = _SPORTSDB_LEAGUE_MAP[key]
-            if canonical not in sportsdb_queries:
-                sportsdb_queries.append(canonical)
+            matched_wiki = _SPORT_LEAGUE_WIKI_MAP[key]
+            matched_sportsdb = _SPORTSDB_LEAGUE_MAP.get(key)
             break
-    if hint and hint not in sportsdb_queries:
-        sportsdb_queries.append(hint)
-    if title and title not in sportsdb_queries:
-        sportsdb_queries.append(title)
+    if matched_sportsdb is None:
+        # League was in Wiki map only — still try TheSportsDB in case it
+        # indexes the canonical English name of the article.
+        for key in sorted(_SPORTSDB_LEAGUE_MAP, key=len, reverse=True):
+            if key in combined:
+                matched_sportsdb = _SPORTSDB_LEAGUE_MAP[key]
+                break
+    if matched_sportsdb:
+        try:
+            hit = await posters.resolve_sport(
+                matched_sportsdb, match_halves=halves or None
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[sport-art] sportsdb-fail q={matched_sportsdb!r}: {exc}", flush=True)
+            hit = None
+        if hit:
+            print(f"[sport-art] OK (league sportsdb) q={matched_sportsdb!r}", flush=True)
+            return f"/api/ai/poster-image?src={quote(hit.url, safe='')}"
+    if matched_wiki:
+        try:
+            hit = await posters.resolve(matched_wiki, "ru", allow_commons=True)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[sport-art] wiki-fail q={matched_wiki!r}: {exc}", flush=True)
+            hit = None
+        if hit:
+            print(f"[sport-art] OK (league wiki) q={matched_wiki!r}", flush=True)
+            return f"/api/ai/poster-image?src={quote(hit.url, safe='')}"
 
-    for q in sportsdb_queries:
+    # Phase C — halves via TheSportsDB. Picks up teams we don't have in
+    # the Cyrillic canonical map (e.g. a niche foreign club the model
+    # wrote in Latin). ``resolve_sport`` tries event search first, then
+    # each half as a team name.
+    if halves:
+        try:
+            hit = await posters.resolve_sport(
+                " vs ".join(halves), match_halves=halves
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[sport-art] team-sportsdb-fail: {exc}", flush=True)
+            hit = None
+        if hit:
+            print("[sport-art] OK (team sportsdb)", flush=True)
+            return f"/api/ai/poster-image?src={quote(hit.url, safe='')}"
+
+    # Phase D — raw hint/title through Wiki as a last-resort fuzzy pass.
+    for q in (hint, title):
         if not q:
             continue
         try:
-            hit = await posters.resolve_sport(q, match_halves=halves or None)
+            hit = await posters.resolve(q, "ru", allow_commons=True)
         except Exception as exc:  # noqa: BLE001
-            print(f"[sport-sportsdb] error q={q!r}: {exc}", flush=True)
+            print(f"[sport-art] raw-wiki-fail q={q[:40]!r}: {exc}", flush=True)
             continue
         if hit:
-            print(f"[sport-sportsdb] OK q={q!r}", flush=True)
+            print(f"[sport-art] OK (raw wiki) q={q[:40]!r}", flush=True)
             return f"/api/ai/poster-image?src={quote(hit.url, safe='')}"
 
     # TMDB TV fallback — docuseries about a team/league give reasonable
@@ -1037,7 +1111,8 @@ async def _resolve_sport_art(posters: PosterResolver, entry: Any) -> str:  # noq
     # Wikipedia crest + TMDB docuseries both miss, we return empty and
     # let the frontend fall back to the blurred channel logo.
     print(
-        f"[sport-art] MISS title={title[:40]!r} wiki={len(queries)} tmdb={len(tmdb_queries)}",
+        f"[sport-art] MISS title={title[:40]!r} "
+        f"club_q={len(club_queries)} tmdb_q={len(tmdb_queries)}",
         flush=True,
     )
     return ""
