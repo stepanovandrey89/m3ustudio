@@ -121,8 +121,22 @@ def build_router(state: Any) -> APIRouter:  # noqa: ANN401 — state is the main
             if cached is not None:
                 remaining = live_items(cached)
                 if len(remaining) >= 3:
+                    # If the cached digest still has pending posters
+                    # (server restart dropped the task, or a previous
+                    # backfill didn't fully converge), re-kick the
+                    # worker. The scheduler is a no-op when a worker
+                    # is already running for this (theme, lang).
+                    if any(not i.poster_url for i in remaining):
+                        _schedule_backfill(
+                            digest_cache, posters, theme_typed, lang, restart=False
+                        )
+                    # Response only includes items that already have a
+                    # resolved poster — matches the "no empty cards"
+                    # requirement. Pending ones stay in the disk JSON
+                    # so the worker can keep chipping away at them.
+                    filled = tuple(i for i in remaining if i.poster_url)
                     payload = cached.to_dict()
-                    payload["items"] = [i.to_dict() for i in remaining]
+                    payload["items"] = [i.to_dict() for i in filled]
                     return JSONResponse({"cached": True, **payload})
 
         main_channels = _main_channels(state)
@@ -212,7 +226,22 @@ def build_router(state: Any) -> APIRouter:  # noqa: ANN401 — state is the main
         # date rolls over. Letting the next request regenerate is cheap.
         if result.items:
             digest_cache.put(result)
-        return JSONResponse({"cached": False, **result.to_dict()})
+            # Any items left without a poster on the first pass? Kick off
+            # the background backfill worker so a subsequent page load
+            # sees a complete digest. The worker writes hits back into
+            # the JSON and, after max rounds, prunes truly unresolvable
+            # items so the visible digest has "no empty cards".
+            if any(not i.poster_url for i in result.items):
+                _schedule_backfill(
+                    digest_cache, posters, theme_typed, lang, restart=True
+                )
+        # Response only surfaces cards that already have a poster — the
+        # JSON on disk still carries the missing ones for the backfill
+        # worker to work on. A page refresh once the worker has made
+        # progress will surface the newly-filled cards automatically.
+        payload = result.to_dict()
+        payload["items"] = [i.to_dict() for i in result.items if i.poster_url]
+        return JSONResponse({"cached": False, **payload})
 
     @router.delete("/ai/digest")
     def invalidate_digest() -> JSONResponse:
@@ -1143,56 +1172,218 @@ _THEME_KEYWORDS: dict[str, list[str]] = {
 
 DIGEST_TARGET_ITEMS = 9
 
+# Background backfill: fill missing ``poster_url`` values in the cached
+# digest iteratively until "no empty cards" remain, then stop.
+#
+# Running cost is bounded per (theme, lang): at most BACKFILL_MAX_ROUNDS
+# rounds, each with one gpt-4.1 call + one resolver call per still-
+# missing item. The per-key task dict prevents duplicate concurrent
+# workers — a fresh /api/ai/digest call can request a restart (new
+# digest contents) or a no-op (cached read while a worker is already
+# running).
+BACKFILL_MAX_ROUNDS = 3
+BACKFILL_ROUND_DELAY_SECONDS = 20.0
+_backfill_tasks: dict[tuple[str, str], asyncio.Task[None]] = {}
 
-async def _enhance_missing_posters(
-    missing: list[Any],
+
+def _schedule_backfill(
+    digest_cache: Any,  # noqa: ANN401 — DigestCache (avoid import cycle)
+    posters: PosterResolver,
+    theme: str,
+    lang: str,
+    *,
+    restart: bool,
+) -> None:
+    """Start the poster backfill worker for ``(theme, lang)``.
+
+    ``restart=True`` cancels any in-flight worker and launches a fresh
+    one — used after a brand-new digest is generated. ``restart=False``
+    is a no-op when a worker is already running — used on cached reads
+    to re-kick the worker after a server restart without stomping on
+    a live one.
+    """
+    import server.ai.client as _ai_client
+
+    cli = _ai_client.get_client()
+    if cli is None:
+        return
+    key = (theme, lang)
+    prev = _backfill_tasks.get(key)
+    if prev is not None and not prev.done():
+        if not restart:
+            return
+        prev.cancel()
+    task = asyncio.create_task(
+        _backfill_digest_posters(digest_cache, posters, cli, theme, lang)
+    )
+    _backfill_tasks[key] = task
+
+
+async def _backfill_digest_posters(
+    digest_cache: Any,  # noqa: ANN401 — DigestCache
     posters: PosterResolver,
     client: Any,  # noqa: ANN401 — AsyncOpenAI
     theme: str,
+    lang: str,
 ) -> None:
-    """Offline enhancer: for digest items whose poster lookup missed,
-    ask gpt-4.1 to propose cleaner search keywords and re-run the
-    resolver. Hits land in ``posters.json`` so the next refresh of the
-    same theme picks them up.
+    """Iteratively fill ``poster_url`` for digest items still missing one.
 
-    Runs as a detached asyncio.Task after the HTTP response is sent —
-    the user never waits on this path.
+    After each successful resolve we patch the item in place on disk so
+    a browser refresh surfaces it immediately. On the final round we
+    prune any items still without a poster so the visible digest has
+    "no empty cards" — the user's explicit requirement.
     """
-    for entry in missing:
-        prompt = (
-            f"Suggest 2-4 concise English search keywords to find a poster "
-            f"or logo image for this TV item on TMDB or Wikipedia. "
-            f'Theme: {theme}. Title: "{entry.title[:120]}". '
-            f'Description: "{(entry.blurb or "")[:200]}". '
-            f"For a sport event reply with the league name (e.g. 'NHL', "
-            f"'Russian Premier League') or the first team name with the "
-            f"sport suffix ('FC Krasnodar', 'Spartak Moscow football'). "
-            f"For a film reply with the canonical title, year, and the word "
-            f"'film' (e.g. 'Inception 2010 film'). "
-            f"ONLY the keywords, no prose, no quotes."
-        )
-        try:
-            response = await client.chat.completions.create(
-                model="gpt-4.1",
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=40,
+    from server.ai.digest import Digest, DigestEntry  # local import
+
+    try:
+        for round_idx in range(BACKFILL_MAX_ROUNDS):
+            current = digest_cache.get(theme, lang)
+            if current is None:
+                return
+            missing = [i for i in current.items if not i.poster_url]
+            if not missing:
+                print(
+                    f"[backfill] {theme}/{lang} complete after round {round_idx}",
+                    flush=True,
+                )
+                return
+            print(
+                f"[backfill] {theme}/{lang} round={round_idx + 1}/"
+                f"{BACKFILL_MAX_ROUNDS} missing={len(missing)}",
+                flush=True,
             )
-        except Exception as exc:  # noqa: BLE001 — this path must never crash the loop
-            print(f"[poster-enhance] llm-fail {entry.title[:40]!r}: {exc}", flush=True)
-            continue
-        text = (response.choices[0].message.content or "").strip()
-        if not text or len(text) > 120:
-            continue
-        try:
-            hit = await posters.resolve(text, "ru", allow_commons=(theme == "sport"))
-        except Exception as exc:  # noqa: BLE001
-            print(f"[poster-enhance] resolve-fail {text!r}: {exc}", flush=True)
-            continue
-        status = "HIT" if hit else "still-miss"
-        print(
-            f"[poster-enhance] {status} for {entry.title[:40]!r} via keywords={text!r}",
-            flush=True,
+            for entry in missing:
+                new_url = await _retry_poster_for_entry(
+                    entry, theme, posters, client, lang
+                )
+                if not new_url:
+                    continue
+                # Read the latest on-disk snapshot before patching — a
+                # fresh generation may have replaced the digest while we
+                # were waiting on the LLM. Match by (channel_id, start)
+                # so we only update items that still exist.
+                snapshot = digest_cache.get(theme, lang)
+                if snapshot is None:
+                    return
+                patched_items: list[DigestEntry] = []
+                did_patch = False
+                for e in snapshot.items:
+                    if (
+                        not e.poster_url
+                        and e.channel_id == entry.channel_id
+                        and e.start == entry.start
+                    ):
+                        patched_items.append(
+                            DigestEntry(
+                                channel_id=e.channel_id,
+                                channel_name=e.channel_name,
+                                title=e.title,
+                                start=e.start,
+                                stop=e.stop,
+                                blurb=e.blurb,
+                                poster_keywords=e.poster_keywords,
+                                poster_url=new_url,
+                            )
+                        )
+                        did_patch = True
+                    else:
+                        patched_items.append(e)
+                if did_patch:
+                    digest_cache.put(
+                        Digest(
+                            date=snapshot.date,
+                            theme=snapshot.theme,
+                            lang=snapshot.lang,
+                            generated_at=snapshot.generated_at,
+                            items=tuple(patched_items),
+                        )
+                    )
+                    print(
+                        f"[backfill] HIT {entry.title[:40]!r}",
+                        flush=True,
+                    )
+            if round_idx < BACKFILL_MAX_ROUNDS - 1:
+                await asyncio.sleep(BACKFILL_ROUND_DELAY_SECONDS)
+        # Final sweep: prune items still without a poster so the visible
+        # digest has no empty cards. Keep at least one item around even
+        # if the sweep would empty the digest — better a single card
+        # than "пусто" until the next generation.
+        final = digest_cache.get(theme, lang)
+        if final is None:
+            return
+        keep = tuple(i for i in final.items if i.poster_url)
+        dropped = len(final.items) - len(keep)
+        if dropped and keep:
+            print(
+                f"[backfill] {theme}/{lang} pruned {dropped} unresolvable "
+                f"item(s) after {BACKFILL_MAX_ROUNDS} rounds",
+                flush=True,
+            )
+            digest_cache.put(
+                Digest(
+                    date=final.date,
+                    theme=final.theme,
+                    lang=final.lang,
+                    generated_at=final.generated_at,
+                    items=keep,
+                )
+            )
+        elif dropped and not keep:
+            print(
+                f"[backfill] {theme}/{lang} all {dropped} items still "
+                f"unresolved — leaving them for the next refresh",
+                flush=True,
+            )
+    except asyncio.CancelledError:
+        print(f"[backfill] {theme}/{lang} cancelled", flush=True)
+        raise
+
+
+async def _retry_poster_for_entry(
+    entry: Any,  # noqa: ANN401 — DigestEntry
+    theme: str,
+    posters: PosterResolver,
+    client: Any,  # noqa: ANN401 — AsyncOpenAI
+    lang: str,
+) -> str:
+    """Ask gpt-4.1 for cleaner keywords then hit the poster resolver.
+
+    Returns a proxied URL on hit, empty string on miss or error. The
+    backfill loop uses the return value to decide whether to patch the
+    entry on disk.
+    """
+    prompt = (
+        f"Suggest 2-4 concise English search keywords to find a poster "
+        f"or logo image for this TV item on TMDB or Wikipedia. "
+        f'Theme: {theme}. Title: "{entry.title[:120]}". '
+        f'Description: "{(entry.blurb or "")[:200]}". '
+        f"For a sport event reply with the league name (e.g. 'NHL', "
+        f"'Russian Premier League') or the first team name with the "
+        f"sport suffix ('FC Krasnodar', 'Spartak Moscow football'). "
+        f"For a film reply with the canonical title, year, and the word "
+        f"'film' (e.g. 'Inception 2010 film'). "
+        f"ONLY the keywords, no prose, no quotes."
+    )
+    try:
+        response = await client.chat.completions.create(
+            model="gpt-4.1",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=40,
         )
+    except Exception as exc:  # noqa: BLE001 — loop must never crash
+        print(f"[backfill] llm-fail {entry.title[:40]!r}: {exc}", flush=True)
+        return ""
+    text = (response.choices[0].message.content or "").strip()
+    if not text or len(text) > 120:
+        return ""
+    try:
+        hit = await posters.resolve(text, lang, allow_commons=(theme == "sport"))
+    except Exception as exc:  # noqa: BLE001
+        print(f"[backfill] resolve-fail {text!r}: {exc}", flush=True)
+        return ""
+    if not hit:
+        return ""
+    return f"/api/ai/poster-image?src={quote(hit.url, safe='')}"
 
 
 async def _hydrate_digest_posters(
@@ -1200,14 +1391,15 @@ async def _hydrate_digest_posters(
     posters: PosterResolver,
     lang: str,
 ) -> Any:  # noqa: ANN401
-    """Resolve poster URLs, deduplicate, ensure 9 items, return a Digest.
+    """Resolve poster URLs, deduplicate, slice to 9, return a Digest.
 
     Pipeline (runs AFTER the model picks items, BEFORE we cache / send):
       1. Parallel poster resolve via TMDB → Wiki (see ``_resolve_poster_for_title``).
-      2. For cinema, poster is mandatory — dropping talk-shows / news that
-         slipped the theme filter. For sport the channel logo is used as
-         fallback when TMDB has no specific-event poster (Bayern vs
-         Borussia has no TMDB entry but the channel has a crest).
+      2. ALL items are kept — including ones whose first-pass poster
+         lookup missed. The HTTP layer filters those out of the response,
+         but they stay in the on-disk JSON so the background backfill
+         worker can retry with gpt-4.1-rewritten keywords and eventually
+         produce a full "no empty cards" state.
       3. Dedupe by lowercased title so the same film recommended from two
          channels never shows twice.
       4. Sort by start time — nearest first — and slice to 9.
@@ -1240,28 +1432,7 @@ async def _hydrate_digest_posters(
             poster_url=url,
         )
 
-    hydrated = await asyncio.gather(*(_resolve(i) for i in digest.items))
-
-    # Poster mandatory for all themes. Cinema drops series / talk-shows
-    # that slipped the filter; sport drops events whose Wiki crest lookup
-    # failed. Better to show 6 solid cards than 9 with garbage imagery —
-    # users reported the channel-logo fallback for sport as "говно".
-    with_poster = [e for e in hydrated if e.poster_url]
-    missing_poster = [e for e in hydrated if not e.poster_url]
-
-    # Fire-and-forget: for items we had to drop, kick off a background
-    # task that asks gpt-4.1 to craft better search keywords and retries
-    # the resolver. Hits land in the disk-cache so the next refresh of
-    # this theme picks them up and surfaces the card. Budget is small
-    # (~1 call per missing item × ~5 items × ~1 refresh/day).
-    if missing_poster:
-        import server.ai.client as _ai_client
-
-        cli = _ai_client.get_client()
-        if cli is not None:
-            asyncio.create_task(_enhance_missing_posters(missing_poster, posters, cli, theme))
-
-    hydrated = with_poster
+    hydrated = list(await asyncio.gather(*(_resolve(i) for i in digest.items)))
 
     # Dedupe by normalized title. For sport the model often returns the
     # same match with different prefixes ("Футбол. Чемпионат Италии.
