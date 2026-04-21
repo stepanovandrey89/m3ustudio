@@ -10,7 +10,7 @@ import asyncio
 import hashlib
 import json
 import re
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlparse
@@ -24,7 +24,10 @@ from server.ai.client import AIConfig, get_client
 from server.ai.context import (
     build_main_schedule,
     channels_mentioned,
+    detect_time_of_day,
     narrow_by_programme_content,
+    narrow_by_time_window,
+    resolve_tod_window,
 )
 from server.ai.digest import ALL_THEMES, DigestCache, Theme, live_items
 from server.ai.generate import ToolExecutor, _clean_channel_id, generate_digest, stream_chat
@@ -332,20 +335,37 @@ def build_router(state: Any) -> APIRouter:  # noqa: ANN401 — state is the main
             raise HTTPException(503, "OPENAI_API_KEY is not configured")
 
         main_channels = _main_channels(state)
-        # Default chat scope: next 8 h, strictly upcoming. `deep_search`
-        # widens to 7 days for queries like "what's on Champions League next
-        # Tuesday" where the everyday window can't reach.
-        future_hours = 168 if body.deep_search else 8
+        last_user_msg = next(
+            (m.content for m in reversed(body.messages) if m.role == "user"),
+            "",
+        )
+        # Detect a time-of-day cue in the user's question ("на вечер",
+        # "утром", "ночью"). When present we widen the EPG window so we
+        # don't truncate the asked slice of the day — e.g. a query at
+        # 10:00 about "вечером" needs EPG through 24:00, well past the
+        # default 8h horizon — and later narrow programmes to exactly
+        # that window so the model can only recommend from it.
+        tod_label = (
+            None if body.deep_search else detect_time_of_day(last_user_msg)
+        )
+        tod_window: tuple[datetime, datetime] | None = None
+        if tod_label is not None:
+            window_start, window_stop = resolve_tod_window(
+                tod_label, datetime.now(UTC)
+            )
+            hours_needed = (window_stop - datetime.now(UTC)).total_seconds() / 3600
+            future_hours = max(8, min(30, int(hours_needed) + 2))
+            tod_window = (window_start, window_stop)
+        elif body.deep_search:
+            future_hours = 168
+        else:
+            future_hours = 8
         # Cap entries per channel to keep the prompt bounded. A normal-mode
         # "what's on tonight" never needs 12 programmes from a single channel.
         max_per_channel = None if body.deep_search else 6
         # If the user named a channel in their latest message, restrict the
         # EPG context to just those channels — no reason to send 149
         # favourites of programme data when the question is about one.
-        last_user_msg = next(
-            (m.content for m in reversed(body.messages) if m.role == "user"),
-            "",
-        )
         scoped_channels = channels_mentioned(last_user_msg, main_channels) or main_channels
         schedules = build_main_schedule(
             state.epg,
@@ -363,6 +383,12 @@ def build_router(state: Any) -> APIRouter:  # noqa: ANN401 — state is the main
         # routinely cuts the EPG block 5-10x.
         if len(scoped_channels) == len(main_channels):
             schedules = narrow_by_programme_content(last_user_msg, schedules)
+        # Time-of-day narrow: strip programmes outside the asked window
+        # so the model can't reach for an earlier/later slot.
+        if tod_window is not None:
+            narrowed_tod = narrow_by_time_window(schedules, *tod_window)
+            if narrowed_tod:
+                schedules = narrowed_tod
         history = [m.model_dump() for m in body.messages]
 
         # Tool executor bound to this request's channel map.

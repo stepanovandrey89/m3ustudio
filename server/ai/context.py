@@ -11,9 +11,125 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Literal
+from zoneinfo import ZoneInfo
 
 from server.epg import EpgGuide
 from server.playlist import Channel
+
+# Timezone used to interpret "evening/morning/night" user phrases. EPG
+# data is Russian-sourced so Moscow is the meaningful local clock for
+# every user we serve today.
+_USER_LOCAL_TZ = ZoneInfo("Europe/Moscow")
+
+TimeOfDay = Literal["morning", "afternoon", "evening", "night"]
+
+# Local wall-clock hour ranges per phrase. Stop > 24 wraps past midnight
+# into the next day (night window bleeds into early hours).
+_TOD_RANGES: dict[TimeOfDay, tuple[int, int]] = {
+    "morning": (6, 12),
+    "afternoon": (12, 18),
+    "evening": (18, 24),
+    "night": (23, 30),  # 23:00-06:00 next day
+}
+
+# Phrase patterns mapped to a time-of-day label. Ordered longest-first so
+# "поздним вечером" and "глубокой ночью" beat bare "вечером"/"ночью".
+_TOD_PATTERNS: tuple[tuple[TimeOfDay, tuple[str, ...]], ...] = (
+    (
+        "evening",
+        (
+            "на вечер",
+            "этим вечером",
+            "сегодня вечером",
+            "вечером",
+            "вечер",
+            "tonight",
+            "this evening",
+            "in the evening",
+            "evening",
+        ),
+    ),
+    (
+        "morning",
+        (
+            "утром",
+            "с утра",
+            "на утро",
+            "утро",
+            "morning",
+            "in the morning",
+        ),
+    ),
+    (
+        "afternoon",
+        (
+            "днём",
+            "днем",
+            "в обед",
+            "после обеда",
+            "afternoon",
+            "in the afternoon",
+        ),
+    ),
+    (
+        "night",
+        (
+            "ночью",
+            "в ночь",
+            "поздно вечером",
+            "поздним вечером",
+            "ночь",
+            "late night",
+            "overnight",
+            "tonight late",
+        ),
+    ),
+)
+
+
+def detect_time_of_day(text: str) -> TimeOfDay | None:
+    """Return a coarse time-of-day label if the text contains a phrase.
+
+    Matches are substring-based on the lowered text and stable under
+    punctuation noise. Returns the first label whose phrases appear.
+    """
+    if not text:
+        return None
+    low = text.lower()
+    for label, phrases in _TOD_PATTERNS:
+        for phrase in phrases:
+            if phrase in low:
+                return label
+    return None
+
+
+def resolve_tod_window(label: TimeOfDay, now_utc: datetime) -> tuple[datetime, datetime]:
+    """Translate ``label`` into a concrete ``(start, stop)`` time window.
+
+    The window is anchored to the user's local timezone and points at the
+    *next* occurrence of that time-of-day: if it's already 20:00 and the
+    user says "вечер", we return (20:00 today, 24:00 today). If 05:00 and
+    "вечер", we return (18:00 today, 24:00 today). The returned datetimes
+    are aware (tz = Moscow) so downstream filtering compares directly
+    against EPG programme timestamps.
+    """
+    start_h, stop_h = _TOD_RANGES[label]
+    now_local = now_utc.astimezone(_USER_LOCAL_TZ)
+    base = now_local.replace(minute=0, second=0, microsecond=0)
+    window_start = base.replace(hour=start_h)
+    window_stop = base.replace(hour=stop_h % 24)
+    if stop_h >= 24:
+        window_stop = window_stop + timedelta(days=1)
+    if window_stop <= now_local:
+        # Today's window has fully elapsed — point at tomorrow's.
+        window_start = window_start + timedelta(days=1)
+        window_stop = window_stop + timedelta(days=1)
+    elif window_start < now_local:
+        # We're already inside the window — start from "now" so the
+        # caller doesn't include past-aired programmes.
+        window_start = now_local
+    return window_start, window_stop
 
 
 def _normalize_for_match(text: str) -> str:
@@ -161,6 +277,36 @@ def _search_keywords(text: str) -> list[str]:
             continue
         out.append(tok)
     return out
+
+
+def narrow_by_time_window(
+    schedules: list[ChannelSchedule],
+    window_start: datetime,
+    window_stop: datetime,
+) -> list[ChannelSchedule]:
+    """Keep only programmes starting within ``[window_start, window_stop)``.
+
+    Used by the chat endpoint when the user asks "на вечер" / "утром" so
+    the model sees only picks from the right slice of the day. Channels
+    with zero matches are dropped entirely so the prompt stays tight.
+    Programmes' start timestamps must be aware — EPG parsing normalises
+    them already, so this comparison is safe.
+    """
+    narrowed: list[ChannelSchedule] = []
+    for sch in schedules:
+        matching = tuple(
+            p for p in sch.programmes if window_start <= p.start < window_stop
+        )
+        if matching:
+            narrowed.append(
+                ChannelSchedule(
+                    channel_id=sch.channel_id,
+                    channel_name=sch.channel_name,
+                    group=sch.group,
+                    programmes=matching,
+                )
+            )
+    return narrowed
 
 
 def narrow_by_programme_content(
