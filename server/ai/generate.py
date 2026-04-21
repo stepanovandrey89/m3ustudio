@@ -138,6 +138,17 @@ async def generate_digest(
     except OpenAIError as exc:
         raise RuntimeError(f"OpenAI call failed: {exc}") from exc
 
+    # Record token usage for the audit endpoint. Swallowed on any
+    # failure so the tracker can never break the user-facing path.
+    try:
+        from server.ai.usage import tracker
+
+        t = tracker()
+        if t is not None:
+            t.record_from_response(response, operation=f"digest-{theme}", model=config.digest_model)
+    except Exception:  # noqa: BLE001
+        pass
+
     raw = response.choices[0].message.content or "{}"
     try:
         parsed = json.loads(raw)
@@ -343,6 +354,10 @@ async def _one_round(
         messages=messages,
         tools=tools,
         stream=True,
+        # Ask OpenAI to include a usage block in the final chunk of a
+        # streamed response so the tracker can account for chat tokens
+        # the same way as non-streaming calls.
+        stream_options={"include_usage": True},
     )
 
     collected_text: list[str] = []
@@ -358,6 +373,24 @@ async def _one_round(
         return _TOOL_CALL_LINE_RE.match(line.rstrip("\r")) is not None
 
     async for chunk in stream:
+        # With ``stream_options={"include_usage": True}`` OpenAI sends
+        # a final usage-only chunk after the content finishes —
+        # ``choices`` is empty there. Capture the totals for audit.
+        usage = getattr(chunk, "usage", None)
+        if usage is not None:
+            try:
+                from server.ai.usage import tracker
+
+                t = tracker()
+                if t is not None:
+                    t.record(
+                        model=config.model,
+                        operation="chat",
+                        prompt_tokens=int(getattr(usage, "prompt_tokens", 0) or 0),
+                        completion_tokens=int(getattr(usage, "completion_tokens", 0) or 0),
+                    )
+            except Exception:  # noqa: BLE001
+                pass
         if not chunk.choices:
             continue
         delta = chunk.choices[0].delta

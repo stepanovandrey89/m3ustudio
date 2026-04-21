@@ -199,6 +199,12 @@ class AppState:
         self.transcode_cleanup_task: asyncio.Task | None = None
         self.digest_cache: DigestCache = DigestCache(AI_CACHE)
         self.posters: PosterResolver = PosterResolver(AI_CACHE)
+        # Bind the token-usage tracker — every OpenAI call site
+        # records prompt/completion tokens into usage.json so the
+        # /api/ai/usage endpoint can show a cost breakdown.
+        from server.ai.usage import bind as _bind_usage
+
+        self.usage_tracker = _bind_usage(AI_CACHE / "usage.json")
         self.recordings: RecordingManager = RecordingManager(
             RECORDINGS_ROOT,
             ffmpeg_bin=FFMPEG_BIN,

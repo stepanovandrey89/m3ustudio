@@ -7,6 +7,7 @@ Keeps the AI/recording surface out of main.py so it stays approachable.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import re
@@ -97,6 +98,23 @@ def build_router(state: Any) -> APIRouter:  # noqa: ANN401 — state is the main
     def ai_status() -> JSONResponse:
         cfg = AIConfig.from_env()
         return JSONResponse({"enabled": cfg.enabled, "model": cfg.model})
+
+    @router.get("/ai/usage")
+    def ai_usage(
+        days: int = Query(default=30, ge=1, le=365),
+    ) -> JSONResponse:
+        """Token-usage audit — per-day, per-model, per-operation
+        totals plus estimated cost in USD. ``days`` trims the window
+        to the last N days (default 30)."""
+        from datetime import date, timedelta
+
+        from server.ai.usage import tracker
+
+        t = tracker()
+        if t is None:
+            raise HTTPException(503, "usage tracker not initialised")
+        since = date.today() - timedelta(days=max(0, days - 1))
+        return JSONResponse(t.summary(since=since))
 
     # ------------- Daily Digest ------------------------------------------
 
@@ -1370,6 +1388,12 @@ async def _enrich_cinema_query(title: str, keywords: str, blurb: str = "") -> st
     except Exception as exc:  # noqa: BLE001 — cosmetic, never raise
         print(f"[cinema-enrich] llm-fail {title[:40]!r}: {exc}", flush=True)
         return None
+    with contextlib.suppress(Exception):
+        from server.ai.usage import tracker
+
+        t = tracker()
+        if t is not None:
+            t.record_from_response(resp, operation="cinema-enrich", model="gpt-4.1-mini")
     text = (resp.choices[0].message.content or "").strip().strip("\"«»'")
     if not text or len(text) < 5 or len(text) > 160:
         return None
@@ -1975,6 +1999,12 @@ async def _retry_poster_for_entry(
     except Exception as exc:  # noqa: BLE001 — loop must never crash
         print(f"[backfill] llm-fail {entry.title[:40]!r}: {exc}", flush=True)
         return ""
+    with contextlib.suppress(Exception):
+        from server.ai.usage import tracker
+
+        t = tracker()
+        if t is not None:
+            t.record_from_response(response, operation="poster-backfill", model="gpt-4.1")
     text = (response.choices[0].message.content or "").strip()
     if not text or len(text) > 120:
         return ""
