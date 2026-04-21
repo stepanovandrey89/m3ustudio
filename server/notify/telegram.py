@@ -12,8 +12,34 @@ import html
 import os
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 import httpx
+
+
+def _resolve_public_poster_url(raw: str | None) -> str | None:
+    """Return a publicly fetchable absolute URL for Telegram's link
+    preview, or ``None`` when no usable URL is available.
+
+    Plans and digests store posters as ``/api/ai/poster-image?src=<url>``
+    — relative paths into our proxy. Telegram rejects the whole
+    ``sendMessage`` call with ``WEBPAGE_URL_INVALID`` when the
+    ``link_preview_options.url`` isn't absolute. Besides, our proxy
+    sits behind Cloudflare Access (Google-OAuth gate) so even an
+    absolutised version isn't reachable by Telegram's bot. Passing
+    the underlying ``src`` — the real TMDB / Wikipedia / DDG CDN URL
+    — skips both issues.
+    """
+    if not raw:
+        return None
+    if raw.startswith(("http://", "https://")):
+        return raw
+    if raw.startswith("/api/ai/poster-image"):
+        parsed = urlparse(raw)
+        src = parse_qs(parsed.query).get("src") or []
+        if src and src[0].startswith(("http://", "https://")):
+            return src[0]
+    return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,6 +104,13 @@ class TelegramClient:
         keyboard: dict[str, Any] | None = None
         if watch_url:
             keyboard = {"inline_keyboard": [[{"text": watch_label, "url": watch_url}]]}
+
+        # Telegram needs a publicly-fetchable ABSOLUTE URL for the link
+        # preview. Our plans store proxied "/api/ai/poster-image?src=..."
+        # paths — reject-as-relative would bounce the whole message with
+        # WEBPAGE_URL_INVALID. Extract the underlying src (TMDB / Wiki /
+        # DDG CDN), which Telegram can fetch directly.
+        poster_url = _resolve_public_poster_url(poster_url)
 
         if poster_url:
             # U+200B (ZWSP) hides the anchor visually but still triggers link preview.

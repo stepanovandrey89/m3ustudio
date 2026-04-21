@@ -27,6 +27,7 @@ import asyncio
 import contextlib
 import gzip
 import json
+import re
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, timezone
@@ -45,6 +46,59 @@ WINDOW_DAYS = 3  # keep programmes within ±3 days of load time
 # disk before we re-parse the source XML. 24h keeps the file fresh
 # without paying the XML-parse cost on every restart.
 JSON_CACHE_TTL_SECONDS = 24 * 3600
+
+# Technical suffix the EPG source sometimes appends to titles:
+# "(SETANTA_SPORT2_HD)._05-00-32_FULL." — usually a recording-filename
+# artefact leaking from the provider's pipeline. Strip repeatedly so
+# stacked suffixes all go.
+_EPG_TECH_SUFFIX_RE = re.compile(
+    r"\s*\([A-Z0-9_]+\)\._\d{2}-\d{2}-\d{2}_FULL\.?\s*",
+    re.IGNORECASE,
+)
+# Free-standing "_HH-MM-SS_FULL." without a preceding channel-bracket.
+_EPG_TECH_TAIL_RE = re.compile(r"\s*_\d{2}-\d{2}-\d{2}_FULL\.?\s*$", re.IGNORECASE)
+# "(CHANNEL_NAME)" marker bare at the end — another leak shape we see.
+_EPG_TECH_CHAN_RE = re.compile(r"\s*\([A-Z][A-Z0-9_]{2,}\)\s*$")
+# Upper bound for a reasonable programme title. Some EPG entries glue
+# the blurb/description into the title field ("NASCAR Cup... — Страна:
+# США. Доминик и Брайан..."). Cap at the first sentence boundary after
+# this threshold so we get a readable title without losing legitimately
+# long episode names.
+# Soft limit is intentionally low (80 chars) — for over-long titles we
+# want the first sentence boundary EARLY to avoid merging the
+# programme's own blurb-bleed into the title ("…— Страна: США.
+# Доминик и Брайан..." should cut at the country marker, not deep in
+# the bleed). Legitimate titles < _TITLE_HARD_LIMIT aren't touched.
+_TITLE_SOFT_LIMIT = 80
+_TITLE_HARD_LIMIT = 160
+
+
+def sanitise_epg_title(title: str) -> str:
+    """Strip technical suffixes + over-long blurb bleed from a raw EPG
+    programme title. Idempotent, safe to call repeatedly.
+    """
+    if not title:
+        return ""
+    s = title.strip()
+    prev = ""
+    while s and s != prev:
+        prev = s
+        s = _EPG_TECH_SUFFIX_RE.sub(" ", s)
+        s = _EPG_TECH_TAIL_RE.sub("", s)
+        s = _EPG_TECH_CHAN_RE.sub("", s)
+        s = s.strip().rstrip(".").strip()
+    # Collapse runs of whitespace the suffix-strip may have left behind.
+    s = re.sub(r"\s{2,}", " ", s)
+    # Truncate over-long titles at the first sentence boundary past the
+    # soft limit — preserves "Суперкары. 2-й этап. Мельбурн. 4-я гонка"
+    # while cropping "НАСКАР. ... — Страна: США. Доминик и Брайан..."
+    # at "Страна: США."
+    if len(s) > _TITLE_HARD_LIMIT:
+        cut = s.find(". ", _TITLE_SOFT_LIMIT)
+        if cut == -1:
+            cut = s.find(". ", 40)
+        s = s[: cut + 1].strip() if cut != -1 else s[:_TITLE_HARD_LIMIT].rstrip(".,; ") + "…"
+    return s
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,7 +248,7 @@ class EpgGuide:
                     continue
                 progs.append(
                     Programme(
-                        title=str(pd.get("title", "")),
+                        title=sanitise_epg_title(str(pd.get("title", ""))),
                         description=str(pd.get("description", "")),
                         start=start,
                         stop=stop,
@@ -275,10 +329,8 @@ class EpgGuide:
                         ):
                             title_el = elem.find("title")
                             desc_el = elem.find("desc")
-                            title = (
-                                title_el.text.strip()
-                                if title_el is not None and title_el.text
-                                else ""
+                            title = sanitise_epg_title(
+                                title_el.text if title_el is not None else ""
                             )
                             description = (
                                 desc_el.text.strip() if desc_el is not None and desc_el.text else ""
