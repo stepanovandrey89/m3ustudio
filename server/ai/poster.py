@@ -23,6 +23,7 @@ import httpx
 TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/w780"
 TMDB_SEARCH_URL = "https://api.themoviedb.org/3/search/multi"
 TMDB_IMAGES_URL = "https://api.themoviedb.org/3/{media_type}/{id}/images"
+UNSPLASH_SEARCH_URL = "https://api.unsplash.com/search/photos"
 # TheSportsDB — open sports database. Events, team crests, league
 # logos. Free key "3" is explicitly provided for demo / small-site use
 # in their API docs (https://www.thesportsdb.com/api.php). Swap in a
@@ -57,6 +58,7 @@ class PosterResolver:
         self._lock = asyncio.Lock()
         self._tmdb_key = os.environ.get("TMDB_API_KEY", "").strip()
         self._sportsdb_key = os.environ.get("SPORTSDB_API_KEY", "3").strip() or "3"
+        self._unsplash_key = os.environ.get("UNSPLASH_ACCESS_KEY", "").strip()
 
     @property
     def root(self) -> Path:
@@ -163,6 +165,144 @@ class PosterResolver:
                 return hit
 
         hit = await self._fetch(clean, lang, allow_commons=allow_commons)
+        async with self._lock:
+            self._mem[key] = (time.time(), hit)
+            self._save()
+        return hit
+
+    async def resolve_tmdb_tv(self, keywords: str) -> PosterHit | None:
+        """Sport fallback: search TMDB for a single team/league name and
+        accept the first TV show or film result that has a poster.
+
+        For queries like ``"FC Barcelona"``, ``"Real Madrid"`` or
+        ``"Formula 1"`` TMDB indexes high-quality docuseries posters
+        («Драйв выживания», «Вместе до конца», «Внутри ФК Барселоны»)
+        that give a sport tile a respectable on-topic visual when no
+        crest or match poster exists.
+
+        Not useful for matchup queries like ``"Barcelona vs Espanyol"``
+        — TMDB returns nothing. The caller is expected to split halves
+        and feed each one separately.
+        """
+        clean = keywords.strip()
+        if not clean or not self._tmdb_key:
+            return None
+        key = f"sport-tmdb::{self._key(clean, 'ru')}"
+        cached = self._mem.get(key)
+        if cached:
+            ts, hit = cached
+            ttl = CACHE_TTL_SECONDS if hit else NEGATIVE_TTL_SECONDS
+            if time.time() - ts < ttl:
+                return hit
+
+        hit: PosterHit | None = None
+        async with httpx.AsyncClient(
+            timeout=4.0,
+            follow_redirects=True,
+            headers={"User-Agent": "m3u-studio/0.7 (sport-tmdb-tv)"},
+        ) as client:
+            try:
+                resp = await client.get(
+                    TMDB_SEARCH_URL,
+                    params={
+                        "api_key": self._tmdb_key,
+                        "query": clean,
+                        "language": "ru-RU",
+                        "include_adult": "false",
+                    },
+                )
+                resp.raise_for_status()
+                data: dict[str, Any] = resp.json()
+            except httpx.HTTPError:
+                data = {}
+            for cand in data.get("results") or []:
+                media_type = cand.get("media_type") or ""
+                if media_type not in ("tv", "movie"):
+                    continue
+                default_poster = cand.get("poster_path")
+                if not default_poster:
+                    continue
+                tmdb_id = cand.get("id")
+                chosen = None
+                if tmdb_id:
+                    chosen = await _tmdb_pick_localized_poster(
+                        client, media_type, tmdb_id, "ru", self._tmdb_key
+                    )
+                final = chosen or default_poster
+                if final:
+                    hit = PosterHit(url=f"{TMDB_IMAGE_BASE}{final}", source="tmdb")
+                    break
+            if hit is not None:
+                await self.prefetch(hit.url, client=client)
+
+        async with self._lock:
+            self._mem[key] = (time.time(), hit)
+            self._save()
+        return hit
+
+    async def resolve_unsplash(self, keywords: str) -> PosterHit | None:
+        """Free editorial-photo fallback for sport tiles.
+
+        Unsplash indexes thousands of high-quality team / stadium /
+        equipment photos. For a query like ``"Spartak Moscow"`` or
+        ``"Formula 1 Ferrari"`` it returns real photos without the
+        watermarks or licensing friction of paid stocks. Orientation is
+        constrained to portrait/squarish so the frame matches the poster
+        tile without awkward letterboxing.
+
+        Requires ``UNSPLASH_ACCESS_KEY`` in the environment. Missing key
+        → returns ``None`` so the caller falls through to the next
+        fallback.
+        """
+        clean = keywords.strip()
+        if not clean or not self._unsplash_key:
+            return None
+        key = f"sport-unsplash::{self._key(clean, 'ru')}"
+        cached = self._mem.get(key)
+        if cached:
+            ts, hit = cached
+            ttl = CACHE_TTL_SECONDS if hit else NEGATIVE_TTL_SECONDS
+            if time.time() - ts < ttl:
+                return hit
+
+        hit: PosterHit | None = None
+        async with httpx.AsyncClient(
+            timeout=4.0,
+            follow_redirects=True,
+            headers={
+                "User-Agent": "m3u-studio/0.7 (sport-unsplash)",
+                "Authorization": f"Client-ID {self._unsplash_key}",
+                "Accept-Version": "v1",
+            },
+        ) as client:
+            # Portrait first to match the poster tile; if none available,
+            # squarish is acceptable. Landscape we skip — it crops badly.
+            for orientation in ("portrait", "squarish"):
+                try:
+                    resp = await client.get(
+                        UNSPLASH_SEARCH_URL,
+                        params={
+                            "query": clean,
+                            "per_page": "3",
+                            "orientation": orientation,
+                            "content_filter": "high",
+                        },
+                    )
+                    resp.raise_for_status()
+                    data: dict[str, Any] = resp.json()
+                except httpx.HTTPError:
+                    continue
+                for result in data.get("results") or []:
+                    urls = result.get("urls") or {}
+                    url = urls.get("regular") or urls.get("small") or urls.get("full")
+                    if url:
+                        hit = PosterHit(url=str(url), source="unsplash")
+                        break
+                if hit:
+                    break
+            if hit is not None:
+                await self.prefetch(hit.url, client=client)
+
         async with self._lock:
             self._mem[key] = (time.time(), hit)
             self._save()
