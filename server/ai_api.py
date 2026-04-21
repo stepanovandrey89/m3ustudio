@@ -205,6 +205,18 @@ def build_router(state: Any) -> APIRouter:  # noqa: ANN401 — state is the main
             cinema_clean = _exclude_non_cinema(schedules)
             if cinema_clean:
                 schedules = cinema_clean
+        elif theme_typed == "sport":
+            # Symmetric filter for sport: drop feature films / scripted
+            # series that mention a sport in their plot ("Виола в бутсах"
+            # is a fictional film about a girl playing football; "Кухня.
+            # Последняя битва (2017)" is a scripted series finale). The
+            # model keeps picking them because their EPG descriptions
+            # match the football / hockey keyword filter. Removing them
+            # from the schedule the model sees is the only guaranteed
+            # way to keep them out of the sport digest.
+            sport_clean = _exclude_non_sport(schedules)
+            if sport_clean:
+                schedules = sport_clean
         print(
             f"[digest-debug] theme={theme_typed} schedules={len(schedules)} "
             f"channels={len(main_channels)}",
@@ -1736,6 +1748,97 @@ def _exclude_non_cinema(schedules: list) -> list:
                 )
             )
     return clean
+
+
+# Fiction-signal regex applied to sport items. If the EPG description or
+# title carries any of these markers, the programme is a feature film or
+# scripted series — no matter what its plot is. Cases that leaked into
+# "sport" digests after the prompt tightening:
+#   * "Виола в бутсах"     → description: "Художественный фильм …"
+#   * "Кухня. Последняя битва (2017)" → title has (YYYY), description:
+#                                       "Фиктивный сериал про …"
+# This filter runs BEFORE the model sees the schedule so it can't be
+# talked into picking these, AND again on the resulting digest items so
+# a model hallucination can't slip past the pre-filter.
+_FICTION_SIGNAL_RE = re.compile(
+    r"("
+    # Russian fiction signals
+    r"художественн\S*\s+фильм"
+    r"|художественн\S*\s+сериал"
+    r"|фильм\s+о\s+\S+"
+    r"|фикт\S*\s+сериал"
+    r"|фикт\S*\s+фильм"
+    r"|мелодрам\S*"
+    r"|комеди(?:я|и|й)"
+    r"|телесериал"
+    r"|в\s+главн\S*\s+рол\S*"
+    r"|в\s+рол(?:и|ях)"
+    r"|режисс[её]р\S*:"
+    r"|истори(?:я|и)\s+\S+"
+    r"|рассказ(?:ывает)?\s+о\s+"
+    r"|сюжет\s+раскрывает"
+    r"|о\s+юн\S*\s+"
+    r"|премьера\s+фильма"
+    # English fiction signals
+    r"|biopic|biograph\S*\s+film|romance|drama\s+film|feature\s+film"
+    r"|starring\s+|cast:|directed\s+by"
+    r")",
+    re.IGNORECASE,
+)
+
+# Titles that end with "(YYYY)" are almost always film/episode production
+# years — not live events. Sport programmes never have a year in parens.
+_TITLE_YEAR_SUFFIX_RE = re.compile(r"\(\s*(?:19|20)\d{2}\s*\)\s*$")
+
+
+def _is_fictional_entry(title: str, description: str) -> bool:
+    """True when an EPG entry looks like a feature film / scripted series."""
+    text = f"{title}\n{description}"
+    if _TITLE_YEAR_SUFFIX_RE.search(title):
+        return True
+    return bool(_FICTION_SIGNAL_RE.search(text))
+
+
+def _exclude_non_sport(schedules: list) -> list:
+    """Drop feature films and scripted series from sport schedules.
+
+    Even when a programme's description mentions "футбол" or "хоккей", if
+    the EPG itself labels it as a feature film / scripted series, it's
+    not sport — it's a film whose plot happens to involve sport. Keeping
+    these out of the model's input is the only reliable way to prevent
+    them appearing in the sport digest.
+    """
+    from server.ai.context import ChannelSchedule  # local import, tight loop
+
+    clean: list[ChannelSchedule] = []
+    for sch in schedules:
+        matching = tuple(
+            p
+            for p in sch.programmes
+            if not _is_fictional_entry(p.title, p.description)
+        )
+        if matching:
+            clean.append(
+                ChannelSchedule(
+                    channel_id=sch.channel_id,
+                    channel_name=sch.channel_name,
+                    group=sch.group,
+                    programmes=matching,
+                )
+            )
+    return clean
+
+
+def _drop_fictional_digest_items(items: tuple) -> tuple:
+    """Post-filter: drop digest entries whose own title or blurb carries
+    fiction signals. Belt-and-braces backstop for the pre-schedule
+    ``_exclude_non_sport`` filter above — small models occasionally
+    hallucinate that a live sport show is a "film" in the blurb, or
+    pick an item the pre-filter missed. Returns the filtered tuple.
+    """
+    return tuple(
+        i for i in items if not _is_fictional_entry(i.title, i.blurb)
+    )
 
 
 def _narrow_by_keywords(schedules: list, keywords: list[str]) -> list:

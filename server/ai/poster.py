@@ -687,6 +687,13 @@ def _query_variants(query: str) -> list[str]:
 
     Example: ``"Severance TV series"`` → ``["Severance TV series",
     "Severance (TV series)", "Severance"]``.
+
+    For Cyrillic titles the helper also appends Russian
+    disambiguations — "Панчер" → ["Панчер", "Панчер (фильм)",
+    "Панчер (сериал)"]. Bare Cyrillic names on ru.wiki frequently
+    route to disambiguation pages (a dictionary entry, a town, a
+    band) and those have no pageimage; the explicit "(фильм)"
+    variant lands on the film article with its fair-use poster.
     """
     seen: set[str] = set()
     out: list[str] = []
@@ -704,10 +711,13 @@ def _query_variants(query: str) -> list[str]:
     lower = original.lower()
     base_stripped = _STRIP_TAIL_RE.sub("", original).strip()
     if base_stripped and base_stripped.lower() != lower:
-        if "tv series" in lower or "tv show" in lower:
+        if "tv series" in lower or "tv show" in lower or "сериал" in lower:
             push(f"{base_stripped} (TV series)")
-        elif "film" in lower or "movie" in lower:
+            push(f"{base_stripped} (сериал)")
+            push(f"{base_stripped} (телесериал)")
+        elif "film" in lower or "movie" in lower or "фильм" in lower:
             push(f"{base_stripped} (film)")
+            push(f"{base_stripped} (фильм)")
 
     current = original
     for _ in range(3):
@@ -716,6 +726,16 @@ def _query_variants(query: str) -> list[str]:
             break
         push(new)
         current = new
+
+    # Cyrillic titles without an explicit film/series marker still need
+    # the Russian disambiguation — we don't know which kind, so push
+    # both and let Wikipedia's 404 tell us which one is right.
+    if _has_cyrillic(original):
+        base_for_disambig = base_stripped or original
+        if "(фильм)" not in base_for_disambig.lower():
+            push(f"{base_for_disambig} (фильм)")
+        if "(сериал)" not in base_for_disambig.lower():
+            push(f"{base_for_disambig} (сериал)")
     return out
 
 
