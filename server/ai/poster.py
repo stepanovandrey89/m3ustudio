@@ -340,7 +340,15 @@ class PosterResolver:
         if cached:
             ts, hit = cached
             ttl = CACHE_TTL_SECONDS if hit else NEGATIVE_TTL_SECONDS
-            if time.time() - ts < ttl:
+            fresh_ttl = time.time() - ts < ttl
+            # Verify the prefetched file still exists on disk. When a
+            # cleanup removes the local file (e.g. we tightened the
+            # image validator and deleted invalid artefacts), the URL
+            # in cache is useless — the proxy endpoint will 400 since
+            # DDG hosts aren't in the allowlist. Fall through to a
+            # fresh search in that case.
+            local_ok = hit is None or self.local_path_for(hit.url).exists()
+            if fresh_ttl and local_ok:
                 return hit
 
         hit: PosterHit | None = None
