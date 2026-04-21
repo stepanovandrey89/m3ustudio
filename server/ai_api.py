@@ -120,171 +120,66 @@ def build_router(state: Any) -> APIRouter:  # noqa: ANN401 — state is the main
         # haven't aired yet (≥ 3 future-starting tiles). The user sees
         # their saved digest instantly on every new login / device — no
         # daily regeneration churn, no "empty on fresh browser" gap.
-        if not refresh:
-            cached = digest_cache.get(theme_typed, lang)
-            if cached is not None:
-                remaining = live_items(cached)
-                if len(remaining) >= 3:
-                    # If the cached digest still has pending posters
-                    # (server restart dropped the task, or a previous
-                    # backfill didn't fully converge), re-kick the
-                    # worker. The scheduler is a no-op when a worker
-                    # is already running for this (theme, lang).
-                    if any(not i.poster_url for i in remaining):
-                        _schedule_backfill(
-                            digest_cache, posters, theme_typed, lang, restart=False
-                        )
-                    # Response only includes items that already have a
-                    # resolved poster — matches the "no empty cards"
-                    # requirement. Pending ones stay in the disk JSON
-                    # so the worker can keep chipping away at them.
-                    filled = tuple(i for i in remaining if i.poster_url)
-                    payload = cached.to_dict()
-                    payload["items"] = [i.to_dict() for i in filled]
-                    return JSONResponse({"cached": True, **payload})
+        cached = digest_cache.get(theme_typed, lang)
+        if not refresh and cached is not None:
+            remaining = live_items(cached)
+            if len(remaining) >= 3:
+                # If the cached digest still has pending posters
+                # (server restart dropped the task, or a previous
+                # backfill didn't fully converge), re-kick the
+                # worker. The scheduler is a no-op when a worker
+                # is already running for this (theme, lang).
+                if any(not i.poster_url for i in remaining):
+                    _schedule_backfill(
+                        digest_cache, posters, theme_typed, lang, restart=False
+                    )
+                # Response only includes items that already have a
+                # resolved poster — matches the "no empty cards"
+                # requirement. Pending ones stay in the disk JSON
+                # so the worker can keep chipping away at them.
+                filled = tuple(i for i in remaining if i.poster_url)
+                payload = cached.to_dict()
+                payload["items"] = [i.to_dict() for i in filled]
+                payload["generating"] = False
+                return JSONResponse({"cached": True, **payload})
 
-        main_channels = _main_channels(state)
-        # Cinema: feature films only. All Main channels sit in the
-        # "Основное" group in the source playlist so we can't filter by
-        # channel-group here — use name patterns instead. Drops sport/
-        # news/kids/music channels plus generalist news-heavy channels
-        # (ТВЦ / НТВ) that otherwise leak talk-shows into "cinema".
-        if theme_typed == "cinema":
-            excluded_name_patterns = (
-                "матч",
-                "match",
-                "setanta",
-                "eurosport",
-                "sport",
-                "нтв",
-                "твц",
-                "россия 24",
-                "мир 24",
-                "рбк",
-                "euronews",
-                "дождь",
-                "карусель",
-                "мульт",
-                "nick",
-                "disney",
-                "дисней",
-                "детск",
-                "kids",
-                "муз тв",
-                "mtv",
-                "music",
-                "музыка",
+        # Fresh generation is expensive (gpt-5-mini takes 30-60s for a
+        # full pick + hydrate pass) so we NEVER block the HTTP request
+        # on it — Cloudflare's 100s edge timeout would cut us off. The
+        # endpoint instead kicks off (or joins) a background task and
+        # returns whatever's in the cache right now, marked "generating".
+        # The frontend polls this endpoint every few seconds while
+        # generating=true and swaps in the fresh digest when it appears.
+        key = (theme_typed, lang)
+        prev_task = _digest_gen_tasks.get(key)
+        if prev_task is None or prev_task.done():
+            _digest_gen_tasks[key] = asyncio.create_task(
+                _generate_digest_bg(
+                    state=state,
+                    digest_cache=digest_cache,
+                    posters=posters,
+                    client=client,
+                    cfg=cfg,
+                    theme=theme_typed,
+                    lang=lang,
+                )
             )
-            main_channels = [
-                ch
-                for ch in main_channels
-                if not any(p in ch.name.lower() for p in excluded_name_patterns)
-            ]
-        schedules = build_main_schedule(
-            state.epg,
-            main_channels,
-            past_hours=0,
-            future_hours=12,
-            only_upcoming=True,
-        )
-        # Pre-narrow EPG to programmes that match the theme via title/desc
-        # keywords. Cuts prompt size 5-10x and keeps the OpenAI response
-        # under Cloudflare's 100s edge cap. Empty result falls back to the
-        # full slate so the model can still look at "assistant picks" for
-        # anything.
-        theme_keywords = _THEME_KEYWORDS.get(theme_typed, [])
-        if theme_keywords:
-            narrowed = _narrow_by_keywords(schedules, theme_keywords)
-            if narrowed:
-                schedules = narrowed
-        if theme_typed == "cinema":
-            # Belt-and-braces: strip series episodes and sport broadcasts
-            # that the positive keyword filter let through. Combined with
-            # the poster-mandatory step in _hydrate_digest_posters this
-            # produces feature-films-only output even when gpt-4o-mini
-            # misbehaves.
-            cinema_clean = _exclude_non_cinema(schedules)
-            if cinema_clean:
-                schedules = cinema_clean
-        elif theme_typed == "sport":
-            # Symmetric filter for sport: drop feature films / scripted
-            # series that mention a sport in their plot ("Виола в бутсах"
-            # is a fictional film about a girl playing football; "Кухня.
-            # Последняя битва (2017)" is a scripted series finale). The
-            # model keeps picking them because their EPG descriptions
-            # match the football / hockey keyword filter. Removing them
-            # from the schedule the model sees is the only guaranteed
-            # way to keep them out of the sport digest.
-            sport_clean = _exclude_non_sport(schedules)
-            if sport_clean:
-                schedules = sport_clean
-        # Strip EPG placeholder slots for every theme — container blocks
-        # like "Кино non-stop", "Хиты кино", "Сериалы подряд" have no
-        # concrete title so the digest can't link them to a poster.
-        schedules_no_placeholders = drop_placeholder_slots(schedules)
-        if schedules_no_placeholders:
-            schedules = schedules_no_placeholders
-        print(
-            f"[digest-debug] theme={theme_typed} schedules={len(schedules)} "
-            f"channels={len(main_channels)}",
-            flush=True,
-        )
-        result = await generate_digest(client, cfg, schedules, theme_typed, lang)
-        print(
-            f"[digest-debug] theme={theme_typed} model_returned={len(result.items)} items",
-            flush=True,
-        )
-        # Resolve every poster in parallel BEFORE responding / caching so
-        # the frontend never renders a "blank card → flash of content"
-        # when the browser plays catch-up on /api/ai/poster requests.
-        result = await _hydrate_digest_posters(result, state.posters, lang)
-        print(
-            f"[digest-debug] theme={theme_typed} after_hydrate={len(result.items)} items",
-            flush=True,
-        )
-        # Post-filter for sport: model sometimes slips a feature film
-        # through the pre-schedule filter (describes its own pick as
-        # "Художественный фильм о …"). Drop those items by inspecting
-        # the blurb + title the model wrote, not just the EPG text.
-        if theme_typed == "sport":
-            filtered_items = _drop_fictional_digest_items(result.items)
-            if len(filtered_items) != len(result.items):
-                print(
-                    f"[digest-debug] theme=sport post-filter dropped "
-                    f"{len(result.items) - len(filtered_items)} fiction items",
-                    flush=True,
-                )
-                from server.ai.digest import Digest as _Digest
-
-                result = _Digest(
-                    date=result.date,
-                    theme=result.theme,
-                    lang=result.lang,
-                    generated_at=result.generated_at,
-                    items=filtered_items,
-                )
-        # Don't persist empty digests — a transient model glitch would otherwise
-        # freeze an "empty" result on disk for the rest of the day, and the
-        # frontend would keep serving it until the user hits refresh or the
-        # date rolls over. Letting the next request regenerate is cheap.
-        if result.items:
-            digest_cache.put(result)
-            # Any items left without a poster on the first pass? Kick off
-            # the background backfill worker so a subsequent page load
-            # sees a complete digest. The worker writes hits back into
-            # the JSON and, after max rounds, prunes truly unresolvable
-            # items so the visible digest has "no empty cards".
-            if any(not i.poster_url for i in result.items):
-                _schedule_backfill(
-                    digest_cache, posters, theme_typed, lang, restart=True
-                )
-        # Response only surfaces cards that already have a poster — the
-        # JSON on disk still carries the missing ones for the backfill
-        # worker to work on. A page refresh once the worker has made
-        # progress will surface the newly-filled cards automatically.
-        payload = result.to_dict()
-        payload["items"] = [i.to_dict() for i in result.items if i.poster_url]
-        return JSONResponse({"cached": False, **payload})
+        # Build the immediate response from whatever's cached.
+        if cached is not None:
+            remaining = live_items(cached)
+            filled = tuple(i for i in remaining if i.poster_url)
+            payload = cached.to_dict()
+            payload["items"] = [i.to_dict() for i in filled]
+        else:
+            payload = {
+                "date": datetime.now(UTC).date().isoformat(),
+                "theme": theme_typed,
+                "lang": lang,
+                "generated_at": "",
+                "items": [],
+            }
+        payload["generating"] = True
+        return JSONResponse({"cached": cached is not None, **payload})
 
     @router.delete("/ai/digest")
     def invalidate_digest() -> JSONResponse:
@@ -1532,6 +1427,141 @@ _THEME_KEYWORDS: dict[str, list[str]] = {
 
 
 DIGEST_TARGET_ITEMS = 9
+
+# Async digest generation — per (theme, lang) background task. The HTTP
+# endpoint never blocks on the slow LLM + poster-resolve pass; it only
+# returns what's cached right now and sets a ``generating: true`` flag
+# so the frontend knows to poll. Dedupe via this dict so a second GET
+# during generation piggy-backs on the in-flight task.
+_digest_gen_tasks: dict[tuple[str, str], asyncio.Task[None]] = {}
+
+
+async def _generate_digest_bg(
+    *,
+    state: Any,  # noqa: ANN401 — AppState
+    digest_cache: Any,  # noqa: ANN401 — DigestCache
+    posters: PosterResolver,
+    client: Any,  # noqa: ANN401 — AsyncOpenAI
+    cfg: Any,  # noqa: ANN401 — AIConfig
+    theme: Theme,
+    lang: str,
+) -> None:
+    """Run the full digest pipeline and write the result to disk.
+
+    Called as a detached asyncio.Task after the HTTP response is
+    already on the wire. Every step matches the synchronous path we
+    used to run inline: schedule pre-filter, theme-specific cleanup,
+    placeholder strip, LLM pick, poster hydrate, fiction post-filter,
+    cache write, backfill kick.
+
+    Swallows exceptions so a bad pass doesn't leave the task in a
+    "crashed" state that prevents future polls from kicking off a
+    fresh attempt.
+    """
+    try:
+        main_channels = _main_channels(state)
+        if theme == "cinema":
+            excluded_name_patterns = (
+                "матч",
+                "match",
+                "setanta",
+                "eurosport",
+                "sport",
+                "нтв",
+                "твц",
+                "россия 24",
+                "мир 24",
+                "рбк",
+                "euronews",
+                "дождь",
+                "карусель",
+                "мульт",
+                "nick",
+                "disney",
+                "дисней",
+                "детск",
+                "kids",
+                "муз тв",
+                "mtv",
+                "music",
+                "музыка",
+            )
+            main_channels = [
+                ch
+                for ch in main_channels
+                if not any(p in ch.name.lower() for p in excluded_name_patterns)
+            ]
+        schedules = build_main_schedule(
+            state.epg,
+            main_channels,
+            past_hours=0,
+            future_hours=12,
+            only_upcoming=True,
+        )
+        theme_keywords = _THEME_KEYWORDS.get(theme, [])
+        if theme_keywords:
+            narrowed = _narrow_by_keywords(schedules, theme_keywords)
+            if narrowed:
+                schedules = narrowed
+        if theme == "cinema":
+            cinema_clean = _exclude_non_cinema(schedules)
+            if cinema_clean:
+                schedules = cinema_clean
+        elif theme == "sport":
+            sport_clean = _exclude_non_sport(schedules)
+            if sport_clean:
+                schedules = sport_clean
+        schedules_no_placeholders = drop_placeholder_slots(schedules)
+        if schedules_no_placeholders:
+            schedules = schedules_no_placeholders
+        print(
+            f"[digest-bg] theme={theme} schedules={len(schedules)} "
+            f"channels={len(main_channels)}",
+            flush=True,
+        )
+
+        result = await generate_digest(client, cfg, schedules, theme, lang)
+        print(
+            f"[digest-bg] theme={theme} model_returned={len(result.items)} items",
+            flush=True,
+        )
+        result = await _hydrate_digest_posters(result, posters, lang)
+        print(
+            f"[digest-bg] theme={theme} after_hydrate={len(result.items)} items",
+            flush=True,
+        )
+        if theme == "sport":
+            filtered_items = _drop_fictional_digest_items(result.items)
+            if len(filtered_items) != len(result.items):
+                print(
+                    f"[digest-bg] theme=sport post-filter dropped "
+                    f"{len(result.items) - len(filtered_items)} fiction items",
+                    flush=True,
+                )
+                from server.ai.digest import Digest as _Digest
+
+                result = _Digest(
+                    date=result.date,
+                    theme=result.theme,
+                    lang=result.lang,
+                    generated_at=result.generated_at,
+                    items=filtered_items,
+                )
+
+        if result.items:
+            digest_cache.put(result)
+            if any(not i.poster_url for i in result.items):
+                _schedule_backfill(
+                    digest_cache, posters, theme, lang, restart=True
+                )
+        else:
+            print(f"[digest-bg] theme={theme} empty result — NOT persisting", flush=True)
+    except asyncio.CancelledError:
+        print(f"[digest-bg] {theme}/{lang} cancelled", flush=True)
+        raise
+    except Exception as exc:  # noqa: BLE001 — detached task must never raise
+        print(f"[digest-bg] {theme}/{lang} FAILED: {exc}", flush=True)
+
 
 # Background backfill: fill missing ``poster_url`` values in the cached
 # digest iteratively until "no empty cards" remain, then stop.

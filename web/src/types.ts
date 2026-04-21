@@ -88,6 +88,11 @@ export interface DigestResponse {
   /** ISO-8601 timestamp of generation (UTC). Empty for pre-v2 caches. */
   generated_at?: string
   items: DigestEntry[]
+  /** True when a fresh generation pass is running on the server — the
+   *  frontend should poll /api/ai/digest again in ~5s to swap in the
+   *  new items. The current `items` array still carries whatever was
+   *  in the cache at request time (empty on a first-ever load). */
+  generating?: boolean
 }
 
 export interface ChatMessage {

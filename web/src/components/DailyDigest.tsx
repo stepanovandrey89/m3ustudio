@@ -43,6 +43,10 @@ function formatGeneratedAt(
 // doesn't restart a background generation or lose already-fetched digests.
 const digestMemory = new Map<string, DigestResponse>()
 const digestInflight = new Map<string, Promise<DigestResponse>>()
+// Timers used for polling /api/ai/digest while the server is generating
+// a fresh digest in the background. Cleared when the response flips
+// generating=false. Keyed by the same cacheKey as digestMemory.
+const digestPollTimers = new Map<string, number>()
 // v2: bump after the backend started sanitising channel_id and ensures items
 // carry clean hex. v1 localStorage entries contained malformed ids like
 // '(id=hex)' that broke /api/logo URLs on render. Old keys get wiped on
@@ -226,7 +230,7 @@ export function DailyDigest({ enabled, onPlan, onRecord, onWatch }: DailyDigestP
         promise
           .then((res) => {
             storeCachedDigest(theme, lang, res)
-            if (refresh) notifyDigestReady(theme, lang, t)
+            if (refresh && !res.generating) notifyDigestReady(theme, lang, t)
           })
           .catch(() => {
             if (refresh) notifyDigestFailed(theme, lang, t)
@@ -241,10 +245,35 @@ export function DailyDigest({ enabled, onPlan, onRecord, onWatch }: DailyDigestP
       try {
         const res = await promise
         setCache((c) => ({ ...c, [theme]: res }))
+        // Background generation: when the server returned generating=true
+        // it kicked off a slow gpt-5-mini pass on the backend and only
+        // sent what's in the cache right now (often empty on first-ever
+        // load). Poll again in a few seconds to swap in the fresh result
+        // as soon as it lands on disk. We keep `loading` true across
+        // polls so the spinner stays visible during the wait.
+        if (res.generating) {
+          const pollTimer = window.setTimeout(() => {
+            void fetchDigest(theme, false)
+          }, 5000)
+          digestPollTimers.set(key, pollTimer)
+        } else {
+          const existing = digestPollTimers.get(key)
+          if (existing !== undefined) {
+            window.clearTimeout(existing)
+            digestPollTimers.delete(key)
+          }
+        }
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err))
       } finally {
-        setLoading((l) => ({ ...l, [theme]: false }))
+        // Keep the spinner up while we're still polling for a fresh
+        // generation — the poll scheduled above will flip loading off
+        // when the server finally responds with generating=false.
+        setLoading((l) => {
+          const stillPolling = digestPollTimers.has(key)
+          if (stillPolling) return l
+          return { ...l, [theme]: false }
+        })
       }
     },
     [enabled, lang, t],
