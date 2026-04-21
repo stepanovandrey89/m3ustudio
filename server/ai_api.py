@@ -235,6 +235,27 @@ def build_router(state: Any) -> APIRouter:  # noqa: ANN401 — state is the main
             f"[digest-debug] theme={theme_typed} after_hydrate={len(result.items)} items",
             flush=True,
         )
+        # Post-filter for sport: model sometimes slips a feature film
+        # through the pre-schedule filter (describes its own pick as
+        # "Художественный фильм о …"). Drop those items by inspecting
+        # the blurb + title the model wrote, not just the EPG text.
+        if theme_typed == "sport":
+            filtered_items = _drop_fictional_digest_items(result.items)
+            if len(filtered_items) != len(result.items):
+                print(
+                    f"[digest-debug] theme=sport post-filter dropped "
+                    f"{len(result.items) - len(filtered_items)} fiction items",
+                    flush=True,
+                )
+                from server.ai.digest import Digest as _Digest
+
+                result = _Digest(
+                    date=result.date,
+                    theme=result.theme,
+                    lang=result.lang,
+                    generated_at=result.generated_at,
+                    items=filtered_items,
+                )
         # Don't persist empty digests — a transient model glitch would otherwise
         # freeze an "empty" result on disk for the rest of the day, and the
         # frontend would keep serving it until the user hits refresh or the
