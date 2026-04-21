@@ -37,6 +37,34 @@ DDG_BROWSER_UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15"
 )
+# Minimum body size for a candidate to be accepted as a real image.
+# Upstream CDNs sometimes 200-OK an empty body (prognozist.ru) or a
+# tiny 43-byte hotlink-blocker pixel (championat.com). Below this
+# threshold we treat the download as a failure and try the next DDG
+# candidate. 2 KB is well under a legitimate thumbnail's size.
+_MIN_IMAGE_BYTES = 2 * 1024
+# Magic-byte prefixes for the image formats we accept in the cache.
+_IMAGE_MAGIC: tuple[bytes, ...] = (
+    b"\xff\xd8\xff",  # JPEG
+    b"\x89PNG\r\n\x1a\n",  # PNG
+    b"GIF87a",  # GIF-87
+    b"GIF89a",  # GIF-89
+    b"RIFF",  # WebP (first 4 bytes, full check below)
+)
+
+
+def _looks_like_image(body: bytes) -> bool:
+    """True when the response body's magic bytes match a known image
+    format. WebP also requires "WEBP" at offset 8, otherwise a random
+    RIFF/AVI file would sneak through.
+    """
+    if len(body) < 12:
+        return False
+    if body.startswith(b"RIFF") and body[8:12] == b"WEBP":
+        return True
+    return any(body.startswith(m) for m in _IMAGE_MAGIC if m != b"RIFF")
+
+
 # TheSportsDB — open sports database. Events, team crests, league
 # logos. Free key "3" is explicitly provided for demo / small-site use
 # in their API docs (https://www.thesportsdb.com/api.php). Swap in a
@@ -93,9 +121,20 @@ class PosterResolver:
         return self._img_dir / f"{digest}{ext}"
 
     async def prefetch(self, remote_url: str, client: httpx.AsyncClient | None = None) -> bool:
-        """Download a poster image to local cache if not already present."""
+        """Download a poster image to local cache if not already present.
+
+        Validates the response body is a real image — upstream CDNs
+        sometimes return 200 OK with an empty body (prognozist.ru), a
+        tiny hotlink-placeholder (championat.com), or an HTML error
+        page disguised as ``image/jpeg``. Any of those would leave a
+        broken/unusable file in our cache that the proxy endpoint
+        correctly rejects (size=0 → allowlist miss → 400). Returns
+        False and deletes the file on any such outcome so the caller
+        can try the next candidate URL instead of silently serving
+        garbage.
+        """
         path = self.local_path_for(remote_url)
-        if path.exists() and path.stat().st_size > 0:
+        if path.exists() and path.stat().st_size >= _MIN_IMAGE_BYTES:
             return True
         owns_client = client is None
         if client is None:
@@ -107,9 +146,18 @@ class PosterResolver:
         try:
             resp = await client.get(remote_url)
             resp.raise_for_status()
-            path.write_bytes(resp.content)
+            body = resp.content
+            if len(body) < _MIN_IMAGE_BYTES or not _looks_like_image(body):
+                # Tiny / non-image body — drop any partial file and
+                # report failure so the caller tries the next hit.
+                with contextlib.suppress(OSError):
+                    path.unlink()
+                return False
+            path.write_bytes(body)
             return True
         except (httpx.HTTPError, OSError):
+            with contextlib.suppress(OSError):
+                path.unlink()
             return False
         finally:
             if owns_client:
@@ -264,32 +312,30 @@ class PosterResolver:
             self._save()
         return hit
 
-    async def resolve_sport_google(self, query: str) -> PosterHit | None:
-        """Primary sport-poster resolver — DuckDuckGo image search.
+    async def resolve_google_image(self, query: str, *, kind: str = "generic") -> PosterHit | None:
+        """Primary poster resolver via DuckDuckGo image search.
 
-        DDG's image endpoint pools Google/Bing/Yandex results and has
-        no API-key requirement, so the full EPG title
-        ("Волейбол. Чемпионат России. Суперлига. ...") can go straight
-        in and the top hit is almost always a matching team / event
-        photo. Much better than our old TMDB/Wiki/TheSportsDB cascade
-        for long-tail sport events that aren't in any curated database.
+        Used for sport tiles (callers pre-clean via
+        ``_clean_sport_query``) and, per user preference, for cinema
+        tiles too (callers pass the model's Latin hint / title as-is).
+        DDG's endpoint aggregates Google/Bing/Yandex so a well-formed
+        query returns an on-theme image even for long-tail events
+        that our curated TMDB/Wiki pipeline doesn't cover.
 
-        Steps:
-          1. Strip EPG broadcast markers ("— Трансляция", "Страна: X",
-             "Трансляция из <Country>", commentator parens) so the
-             query carries only the sport + league + teams.
-          2. Fetch DuckDuckGo's homepage with ``q=query`` to harvest
-             the ``vqd`` session token their image API demands.
-          3. Call ``/i.js`` with the token; take the first result whose
-             image URL is downloadable.
-          4. Prefetch the image into the local cache so the frontend
-             proxy can serve it without opening the per-host allowlist
-             to arbitrary CDNs.
+        Iterates the top DDG candidates and accepts the first whose
+        prefetch downloads a VALID image (magic bytes match + body
+        larger than ``_MIN_IMAGE_BYTES``). Upstream CDNs sometimes
+        200-OK an empty body or a tiny hotlink-blocker pixel; without
+        the iteration we'd serve a blank card.
+
+        ``kind`` is a free-form tag for the cache key namespace (we
+        already keyed on it for sport; now also for cinema) so a later
+        logic change doesn't force a re-fetch of cached hits.
         """
-        clean = _clean_sport_query(query)
+        clean = query.strip()
         if not clean:
             return None
-        key = f"sport-google::{self._key(clean, 'ru')}"
+        key = f"{kind}-google::{self._key(clean, 'ru')}"
         cached = self._mem.get(key)
         if cached:
             ts, hit = cached
@@ -306,16 +352,25 @@ class PosterResolver:
             ) as client:
                 vqd = await _ddg_fetch_vqd(client, clean)
                 if vqd:
-                    hit = await _ddg_search_image(client, clean, vqd)
-                    if hit is not None:
-                        await self.prefetch(hit.url, client=client)
+                    candidates = await _ddg_search_candidates(client, clean, vqd)
+                    for url in candidates:
+                        if await self.prefetch(url, client=client):
+                            hit = PosterHit(url=url, source="ddg-images")
+                            break
         except httpx.HTTPError as exc:
-            print(f"[sport-google] http-fail q={clean!r}: {exc}", flush=True)
+            print(f"[{kind}-google] http-fail q={clean!r}: {exc}", flush=True)
 
         async with self._lock:
             self._mem[key] = (time.time(), hit)
             self._save()
         return hit
+
+    async def resolve_sport_google(self, query: str) -> PosterHit | None:
+        """Backward-compat shim — callers pre-clean with
+        ``_clean_sport_query`` and route through the generic resolver
+        under the ``sport`` cache namespace.
+        """
+        return await self.resolve_google_image(_clean_sport_query(query), kind="sport")
 
     async def resolve_unsplash(self, keywords: str) -> PosterHit | None:
         """Free editorial-photo fallback for sport tiles.
@@ -1174,10 +1229,15 @@ async def _ddg_fetch_vqd(client: httpx.AsyncClient, query: str) -> str | None:
     return None
 
 
-async def _ddg_search_image(client: httpx.AsyncClient, query: str, vqd: str) -> PosterHit | None:
-    """Call DuckDuckGo's image-search JSON endpoint and return the first
-    usable hit. ``locale=ru-ru`` biases results toward Russian-language
-    sources which matches our EPG titles."""
+async def _ddg_search_candidates(
+    client: httpx.AsyncClient, query: str, vqd: str, *, limit: int = 8
+) -> list[str]:
+    """Return up to ``limit`` candidate image URLs from DDG. The caller
+    iterates and prefetches with validation — some URLs point at CDNs
+    that 200-OK an empty body or a tracking pixel, so strictly taking
+    the first hit would silently render a blank card.
+    ``locale=ru-ru`` biases results toward Russian-language sources.
+    """
     try:
         resp = await client.get(
             DDG_IMAGES_URL,
@@ -1197,8 +1257,9 @@ async def _ddg_search_image(client: httpx.AsyncClient, query: str, vqd: str) -> 
         resp.raise_for_status()
         data = resp.json()
     except (httpx.HTTPError, ValueError):
-        return None
-    for result in (data.get("results") or [])[:5]:
+        return []
+    urls: list[str] = []
+    for result in (data.get("results") or [])[: limit * 2]:
         url = result.get("image") or result.get("thumbnail")
         if not url or not isinstance(url, str):
             continue
@@ -1206,5 +1267,8 @@ async def _ddg_search_image(client: httpx.AsyncClient, query: str, vqd: str) -> 
             url = f"https:{url}"
         if not url.startswith("https://"):
             continue
-        return PosterHit(url=url, source="ddg-images")
-    return None
+        if url not in urls:
+            urls.append(url)
+        if len(urls) >= limit:
+            break
+    return urls

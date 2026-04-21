@@ -1329,7 +1329,18 @@ async def _resolve_poster_for_title(
         fallback = latin_hint if latin_hint and latin_hint != title_clean else ""
     try:
         hit = None
+        # Cinema posters now route through DDG image search FIRST —
+        # same engine the sport tiles use. The model's Latin hint
+        # ("Inception 2010 film", "Thunderball 1965 film") is an
+        # excellent Google-Images query and reliably returns a
+        # proper theatrical poster where TMDB's fuzzy Cyrillic match
+        # would sometimes land on the wrong film. Falls through to
+        # TMDB/Wiki when DDG has nothing.
         if primary:
+            hit = await posters.resolve_google_image(primary, kind="cinema")
+        if hit is None and fallback:
+            hit = await posters.resolve_google_image(fallback, kind="cinema")
+        if hit is None and primary:
             hit = await posters.resolve(primary, lang)
         if hit is None and fallback:
             hit = await posters.resolve(fallback, lang)
@@ -1337,9 +1348,10 @@ async def _resolve_poster_for_title(
         # image.tmdb.org / upload.wikimedia.org (avoids CORS, TSPU/ISP
         # blocks, and hides the CDN hostname from the client network).
         proxied = f"/api/ai/poster-image?src={quote(hit.url, safe='')}" if hit else ""
+        source = hit.source if hit else "none"
         print(
             f"[poster] title='{title_clean[:60]}' hint='{latin_hint[:60]}' "
-            f"-> {'OK' if proxied else 'MISS'}",
+            f"-> {'OK' if proxied else 'MISS'} ({source})",
             flush=True,
         )
         return proxied
