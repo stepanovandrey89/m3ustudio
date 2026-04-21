@@ -29,13 +29,13 @@ class AIConfig:
         key = os.environ.get("OPENAI_API_KEY", "").strip()
         model = os.environ.get("OPENAI_MODEL", "gpt-5-mini").strip() or "gpt-5-mini"
         # Digest runs non-interactively and just picks ~12 items from a
-        # pre-filtered list. Upgraded from gpt-4.1-mini to gpt-5-mini —
-        # small mini models kept letting prompt-forbidden picks slip
-        # through ("Виола в бутсах" as sport, generic "Кино non-stop"
-        # slots as concrete films). gpt-5-mini is still fast enough to
-        # stay well under Cloudflare's 100s edge timeout. Overridable
-        # via env if we ever need to fall back.
-        digest_model = os.environ.get("OPENAI_DIGEST_MODEL", "gpt-5-mini").strip() or "gpt-5-mini"
+        # pre-filtered list. Dropped to gpt-5-nano (5× cheaper than
+        # gpt-5-mini: $0.05 in / $0.40 out per 1M tokens) per the
+        # cost-audit findings — digests dominated spend at ~$0.03 a
+        # piece on gpt-5-mini. If quality regresses (prompt-forbidden
+        # picks leaking through, thin poster_keywords), bump
+        # OPENAI_DIGEST_MODEL back to gpt-5-mini via env.
+        digest_model = os.environ.get("OPENAI_DIGEST_MODEL", "gpt-5-nano").strip() or "gpt-5-nano"
         return cls(api_key=key, model=model, digest_model=digest_model, enabled=bool(key))
 
 
