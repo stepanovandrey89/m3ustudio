@@ -1290,32 +1290,74 @@ async def _resolve_sport_art_legacy(posters: PosterResolver, entry: Any) -> str:
     return ""
 
 
+async def _enrich_cinema_query(title: str, keywords: str, blurb: str = "") -> str | None:
+    """Ask gpt-4.1-mini for a rich Google-Images query for a cinema card.
+
+    Bare film titles ("Красные огни", "Панчер") don't rank well on
+    Google Images — the engine returns random red-tail-light photos
+    or random punchers. A 5-10 word query with year + genre + a star
+    name ("Красные огни 2024 триллер Хабенский фильм") reliably pulls
+    up the theatrical poster. Runs only when the existing hint is
+    thin; when the digest prompt already produced a rich string we
+    skip the extra LLM call.
+
+    Returns the enriched query or ``None`` on any LLM/timeout fault.
+    """
+    import server.ai.client as _ai_client
+
+    client = _ai_client.get_client()
+    if client is None:
+        return None
+    prompt = (
+        "Составь развёрнутый поисковый запрос для Google Images чтобы "
+        "найти оригинальный постер фильма / сериала. 5-10 слов, "
+        "с контекстом (год + жанр + одно имя актёра или режиссёра + "
+        "слово 'film' для зарубежного или 'фильм'/'сериал' для "
+        "русского). Если не знаешь точного года или актёра — пропусти "
+        "этот параметр, не выдумывай.\n"
+        f'Название: "{title[:120]}"\n'
+        f'Текущие ключи: "{keywords[:120]}"\n'
+        f'Описание: "{blurb[:200]}"\n'
+        "Ответь ТОЛЬКО самим запросом, без пояснений, без кавычек."
+    )
+    try:
+        resp = await client.chat.completions.create(
+            model="gpt-4.1-mini",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=60,
+        )
+    except Exception as exc:  # noqa: BLE001 — cosmetic, never raise
+        print(f"[cinema-enrich] llm-fail {title[:40]!r}: {exc}", flush=True)
+        return None
+    text = (resp.choices[0].message.content or "").strip().strip("\"«»'")
+    if not text or len(text) < 5 or len(text) > 160:
+        return None
+    return text
+
+
+def _word_count(s: str) -> int:
+    return len(re.findall(r"\S+", s or ""))
+
+
 async def _resolve_poster_for_title(
     posters: PosterResolver,
     title: str,
     poster_keywords: str,
     lang: str,
+    blurb: str = "",
 ) -> str:
     """Resolve a poster URL for a programme.
 
-    TMDB and Wikipedia canonical titles are almost always Latin-script, while
-    EPG feed titles are Russian pirate/dub translations that rarely match
-    exactly ("Остин Пауэрс: Похитители времени" vs TMDB's "Austin Powers: The
-    Spy Who Shagged Me"). We therefore try the model's Latin
-    ``poster_keywords`` hint FIRST when it is present and distinct from the
-    title, and only fall back to the raw Cyrillic title if the Latin query
-    turned up nothing. For English-language UI the order is identical.
+    Google Images (via DDG) is the primary source — its results are
+    richer than TMDB's curated set when the model provides a detailed
+    query. TMDB + Wikipedia stay as fallbacks. The model's Latin hint
+    is preferred as the Google query; when the hint is bare (< 4
+    words) we enrich it via a quick gpt-4.1-mini call so the image
+    search has enough context to rank the real poster first.
     Returns an empty string on any failure so callers can just plug it in.
     """
     title_clean = (title or "").strip()
     latin_hint = (poster_keywords or "").strip()
-    # Signal routing: the model supplies Latin ``poster_keywords`` only for
-    # FOREIGN films (Hollywood titles, sports events). Russian films usually
-    # arrive with no Latin hint.
-    #   * useful Latin hint → foreign film → TMDB via Latin query
-    #   * no Latin hint      → probably Russian → Wiki via Cyrillic title
-    # ``_fetch`` internally orders providers (TMDB-first for Latin queries,
-    # Wiki-first for Cyrillic), so both paths land on the right source.
     has_useful_latin = (
         bool(latin_hint)
         and latin_hint.lower() != title_clean.lower()
@@ -1327,6 +1369,18 @@ async def _resolve_poster_for_title(
     else:
         primary = title_clean
         fallback = latin_hint if latin_hint and latin_hint != title_clean else ""
+    # Enrich thin queries via gpt-4.1-mini before handing to Google
+    # Images. The digest prompt already asks for rich keywords, but a
+    # model slip (empty / 2-word keywords) would otherwise send bare
+    # "Красные огни" to DDG and land on random red-light photos.
+    if _word_count(primary) < 4:
+        enriched = await _enrich_cinema_query(title_clean, primary, blurb)
+        if enriched:
+            print(
+                f"[poster] enriched title={title_clean[:40]!r} -> {enriched!r}",
+                flush=True,
+            )
+            primary = enriched
     try:
         hit = None
         # Cinema posters now route through DDG image search FIRST —
@@ -1927,7 +1981,13 @@ async def _hydrate_digest_posters(
         if theme == "sport":
             url = await _resolve_sport_art(posters, entry)
         else:
-            url = await _resolve_poster_for_title(posters, entry.title, entry.poster_keywords, lang)
+            url = await _resolve_poster_for_title(
+                posters,
+                entry.title,
+                entry.poster_keywords,
+                lang,
+                blurb=entry.blurb,
+            )
         return DigestEntry(
             channel_id=entry.channel_id,
             channel_name=entry.channel_name,
