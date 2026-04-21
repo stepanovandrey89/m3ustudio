@@ -121,14 +121,26 @@ def build_router(state: Any) -> APIRouter:  # noqa: ANN401 — state is the main
         # their saved digest instantly on every new login / device — no
         # daily regeneration churn, no "empty on fresh browser" gap.
         cached = digest_cache.get(theme_typed, lang)
-        if not refresh and cached is not None:
+        key = (theme_typed, lang)
+        gen_task = _digest_gen_tasks.get(key)
+        # A background regeneration is in flight when a task exists
+        # and hasn't finished. Polls that come in after the user's
+        # refresh click MUST see this and keep reporting
+        # ``generating=true`` — otherwise the frontend stops its
+        # 5 s poll loop before the task writes fresh data and the
+        # user is stuck on the old cache.
+        bg_running = gen_task is not None and not gen_task.done()
+
+        # Fast cached path: no refresh request, no regeneration
+        # running, AND the disk state still has enough live items.
+        if not refresh and not bg_running and cached is not None:
             remaining = live_items(cached)
             if len(remaining) >= 3:
                 # If the cached digest still has pending posters
                 # (server restart dropped the task, or a previous
                 # backfill didn't fully converge), re-kick the
-                # worker. The scheduler is a no-op when a worker
-                # is already running for this (theme, lang).
+                # poster-backfill worker. No-op when a worker is
+                # already running for this (theme, lang).
                 if any(not i.poster_url for i in remaining):
                     _schedule_backfill(digest_cache, posters, theme_typed, lang, restart=False)
                 # Response only includes items that already have a
@@ -141,16 +153,15 @@ def build_router(state: Any) -> APIRouter:  # noqa: ANN401 — state is the main
                 payload["generating"] = False
                 return JSONResponse({"cached": True, **payload})
 
+        # Otherwise: we need (or already have) a background regen.
         # Fresh generation is expensive (gpt-5-mini takes 30-60s for a
         # full pick + hydrate pass) so we NEVER block the HTTP request
         # on it — Cloudflare's 100s edge timeout would cut us off. The
-        # endpoint instead kicks off (or joins) a background task and
-        # returns whatever's in the cache right now, marked "generating".
-        # The frontend polls this endpoint every few seconds while
-        # generating=true and swaps in the fresh digest when it appears.
-        key = (theme_typed, lang)
-        prev_task = _digest_gen_tasks.get(key)
-        if prev_task is None or prev_task.done():
+        # endpoint kicks off the task when one isn't running and
+        # returns whatever's cached right now marked generating=true.
+        # The frontend polls this endpoint until generating flips to
+        # false (= the task wrote a fresh digest to disk).
+        if not bg_running:
             _digest_gen_tasks[key] = asyncio.create_task(
                 _generate_digest_bg(
                     state=state,
