@@ -10,7 +10,7 @@ import asyncio
 import hashlib
 import json
 import re
-from datetime import date, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlparse
@@ -26,9 +26,9 @@ from server.ai.context import (
     channels_mentioned,
     narrow_by_programme_content,
 )
-from server.ai.digest import ALL_THEMES, DigestCache, Theme
+from server.ai.digest import ALL_THEMES, DigestCache, Theme, live_items
 from server.ai.generate import ToolExecutor, _clean_channel_id, generate_digest, stream_chat
-from server.ai.poster import PosterResolver
+from server.ai.poster import _SPORTSDB_LEAGUE_MAP, PosterResolver
 from server.notify.telegram import TelegramClient, TelegramConfig
 from server.planner import PlanStore
 from server.planner.scheduler import delete_plan_messages, notify_plan_created
@@ -111,11 +111,19 @@ def build_router(state: Any) -> APIRouter:  # noqa: ANN401 — state is the main
         if client is None:
             raise HTTPException(503, "OPENAI_API_KEY is not configured")
 
-        today = date.today()
+        # Persistent cache: date-independent key (theme, lang). A digest
+        # generated yesterday is reused today as long as enough items
+        # haven't aired yet (≥ 3 future-starting tiles). The user sees
+        # their saved digest instantly on every new login / device — no
+        # daily regeneration churn, no "empty on fresh browser" gap.
         if not refresh:
-            cached = digest_cache.get(today, theme_typed, lang)
+            cached = digest_cache.get(theme_typed, lang)
             if cached is not None:
-                return JSONResponse({"cached": True, **cached.to_dict()})
+                remaining = live_items(cached)
+                if len(remaining) >= 3:
+                    payload = cached.to_dict()
+                    payload["items"] = [i.to_dict() for i in remaining]
+                    return JSONResponse({"cached": True, **payload})
 
         main_channels = _main_channels(state)
         # Cinema: feature films only. All Main channels sit in the
@@ -566,6 +574,151 @@ _SPORT_LEAGUE_WIKI_MAP: dict[str, str] = {
 }
 
 
+# Hockey-specific canonicals for ambiguous team names that exist as
+# BOTH football and hockey clubs (Спартак, ЦСКА, Динамо, Локомотив —
+# same names, different sports). Consulted when the entry's context
+# is hockey; otherwise we fall back to the football map below.
+_RU_HOCKEY_CLUB_CANONICAL: dict[str, tuple[str, ...]] = {
+    "spartak": ("HC Spartak Moscow", "ХК Спартак Москва"),
+    "спартак": ("ХК Спартак Москва", "HC Spartak Moscow"),
+    "cska": ("HC CSKA Moscow", "ХК ЦСКА Москва"),
+    "цска": ("ХК ЦСКА Москва", "HC CSKA Moscow"),
+    "dynamo": ("HC Dynamo Moscow", "ХК Динамо Москва"),
+    "dinamo": ("HC Dynamo Moscow", "ХК Динамо Москва"),
+    "динамо": ("ХК Динамо Москва", "HC Dynamo Moscow"),
+    "lokomotiv": ("Lokomotiv Yaroslavl", "ХК Локомотив Ярославль"),
+    "локомотив": ("ХК Локомотив Ярославль", "Lokomotiv Yaroslavl"),
+    "torpedo": ("Torpedo Nizhny Novgorod", "ХК Торпедо Нижний Новгород"),
+    "торпедо": ("ХК Торпедо Нижний Новгород", "Torpedo Nizhny Novgorod"),
+    # Hockey-only clubs (kept here for consistency; also in the shared map below)
+    "ска": ("ХК СКА", "SKA Saint Petersburg"),
+    "ska": ("SKA Saint Petersburg", "ХК СКА"),
+    "ak bars": ("Ak Bars Kazan", "ХК Ак Барс"),
+    "ак барс": ("ХК Ак Барс", "Ak Bars Kazan"),
+    "avangard": ("Avangard Omsk", "ХК Авангард"),
+    "авангард": ("ХК Авангард", "Avangard Omsk"),
+    "metallurg": ("Metallurg Magnitogorsk", "ХК Металлург (Магнитогорск)"),
+    "металлург": ("ХК Металлург (Магнитогорск)", "Metallurg Magnitogorsk"),
+    "salavat": ("Salavat Yulaev Ufa", "ХК Салават Юлаев"),
+    "салават юлаев": ("ХК Салават Юлаев", "Salavat Yulaev Ufa"),
+    "sibir": ("HC Sibir Novosibirsk", "ХК Сибирь"),
+    "сибирь": ("ХК Сибирь", "HC Sibir Novosibirsk"),
+    "traktor": ("Traktor Chelyabinsk", "ХК Трактор"),
+    "трактор": ("ХК Трактор", "Traktor Chelyabinsk"),
+}
+
+# Russian / ex-Soviet football + hockey club canonicals. Each key maps
+# to the explicit Wikipedia article title(s) that reliably return the
+# club's crest — bare Latin names like "Spartak" otherwise drift to
+# films or player portraits. For ambiguous names shared across sports
+# (Спартак and Динамо are both football AND hockey) we include both
+# ФК- and ХК- variants; the caller's sport-aware query order picks the
+# right one via the ``halves`` path.
+_RU_CLUB_CANONICAL: dict[str, tuple[str, ...]] = {
+    # Moscow-default football clubs
+    "spartak": ("FC Spartak Moscow", "ФК Спартак Москва"),
+    "спартак": ("ФК Спартак Москва", "FC Spartak Moscow"),
+    "lokomotiv": ("FC Lokomotiv Moscow", "ФК Локомотив Москва"),
+    "локомотив": ("ФК Локомотив Москва", "FC Lokomotiv Moscow"),
+    "cska": ("PFC CSKA Moscow", "FC CSKA Moscow", "ПФК ЦСКА"),
+    "цска": ("ПФК ЦСКА", "PFC CSKA Moscow"),
+    "dynamo": ("FC Dynamo Moscow", "ФК Динамо Москва"),
+    "dinamo": ("FC Dynamo Moscow", "ФК Динамо Москва"),
+    "динамо": ("ФК Динамо Москва", "FC Dynamo Moscow"),
+    "torpedo": ("FC Torpedo Moscow", "ФК Торпедо Москва"),
+    "торпедо": ("ФК Торпедо Москва", "FC Torpedo Moscow"),
+    # Saint Petersburg
+    "zenit": ("FC Zenit Saint Petersburg", "ФК Зенит"),
+    "зенит": ("ФК Зенит", "FC Zenit Saint Petersburg"),
+    # Single-city clubs
+    "krasnodar": ("FC Krasnodar", "ФК Краснодар"),
+    "краснодар": ("ФК Краснодар", "FC Krasnodar"),
+    "rostov": ("FC Rostov", "ФК Ростов"),
+    "ростов": ("ФК Ростов", "FC Rostov"),
+    "rubin": ("FC Rubin Kazan", "ФК Рубин"),
+    "рубин": ("ФК Рубин", "FC Rubin Kazan"),
+    "akhmat": ("FC Akhmat Grozny", "ФК Ахмат"),
+    "ахмат": ("ФК Ахмат", "FC Akhmat Grozny"),
+    "sochi": ("PFC Sochi", "ФК Сочи"),
+    "сочи": ("ФК Сочи", "PFC Sochi"),
+    "ural": ("FC Ural Yekaterinburg", "ФК Урал"),
+    "урал": ("ФК Урал", "FC Ural Yekaterinburg"),
+    "krylia sovetov": ("FC Krylia Sovetov Samara", "ФК Крылья Советов"),
+    "крылья советов": ("ФК Крылья Советов", "FC Krylia Sovetov Samara"),
+    "orenburg": ("FC Orenburg", "ФК Оренбург"),
+    "оренбург": ("ФК Оренбург", "FC Orenburg"),
+    "fakel": ("FC Fakel Voronezh", "ФК Факел"),
+    "факел": ("ФК Факел", "FC Fakel Voronezh"),
+    "baltika": ("FC Baltika Kaliningrad", "ФК Балтика"),
+    "балтика": ("ФК Балтика", "FC Baltika Kaliningrad"),
+    "pari nn": ("FC Nizhny Novgorod", "ФК Нижний Новгород"),
+    "нижний новгород": ("ФК Нижний Новгород", "FC Nizhny Novgorod"),
+    # Foreign football — most hit en.wiki via Cyrillic redirect; add
+    # canonical ru.wiki titles so searches for the Latin half land
+    # directly on the club article.
+    "barcelona": ("FC Barcelona", "ФК Барселона"),
+    "барселона": ("ФК Барселона", "FC Barcelona"),
+    "real madrid": ("Real Madrid CF", "Реал Мадрид"),
+    "реал мадрид": ("Реал Мадрид", "Real Madrid CF"),
+    "real": ("Real Madrid CF",),
+    "atletico": ("Atlético Madrid", "Атлетико Мадрид"),
+    "атлетико": ("Атлетико Мадрид", "Atlético Madrid"),
+    "sevilla": ("Sevilla FC", "Севилья"),
+    "севилья": ("Севилья", "Sevilla FC"),
+    "valencia": ("Valencia CF", "Валенсия"),
+    "bilbao": ("Athletic Bilbao", "Атлетик Бильбао"),
+    "manchester united": ("Manchester United F.C.", "Манчестер Юнайтед"),
+    "manchester city": ("Manchester City F.C.", "Манчестер Сити"),
+    "liverpool": ("Liverpool F.C.", "Ливерпуль"),
+    "chelsea": ("Chelsea F.C.", "Челси"),
+    "arsenal": ("Arsenal F.C.", "Арсенал Лондон"),
+    "tottenham": ("Tottenham Hotspur F.C.", "Тоттенхэм Хотспур"),
+    "bayern munich": ("FC Bayern Munich", "Бавария"),
+    "bayern": ("FC Bayern Munich", "Бавария"),
+    "бавария": ("Бавария", "FC Bayern Munich"),
+    "dortmund": ("Borussia Dortmund", "Боруссия Дортмунд"),
+    "boruss": ("Borussia Dortmund", "Боруссия Дортмунд"),
+    "leverkusen": ("Bayer 04 Leverkusen", "Байер 04"),
+    "juventus": ("Juventus F.C.", "Ювентус"),
+    "милан": ("Милан (футбольный клуб)", "A.C. Milan"),
+    "milan": ("A.C. Milan", "Милан (футбольный клуб)"),
+    "inter": ("Inter Milan", "Интернационале"),
+    "интер": ("Интернационале", "Inter Milan"),
+    "napoli": ("S.S.C. Napoli", "Наполи"),
+    "roma": ("A.S. Roma", "Рома (футбольный клуб)"),
+    "lazio": ("S.S. Lazio", "Лацио"),
+    "fiorentina": ("ACF Fiorentina", "Фиорентина"),
+    "lecce": ("U.S. Lecce", "Лечче"),
+    "psg": ("Paris Saint-Germain F.C.", "Пари Сен-Жермен"),
+    "paris": ("Paris Saint-Germain F.C.",),
+    "marseille": ("Olympique de Marseille", "Олимпик Марсель"),
+    "lyon": ("Olympique Lyonnais", "Олимпик Лион"),
+    "benfica": ("S.L. Benfica", "Бенфика"),
+    "porto": ("FC Porto", "Порту"),
+    "ajax": ("AFC Ajax", "Аякс"),
+    "psv": ("PSV Eindhoven", "ПСВ"),
+    "galatasaray": ("Galatasaray S.K.", "Галатасарай"),
+    "fenerbahce": ("Fenerbahçe S.K.", "Фенербахче"),
+    # Russian hockey (KHL) — ambiguous Спартак/Динамо/ЦСКА get the
+    # ФК form above; hockey-context queries add the ХК prefix via
+    # _club_variants. Named-only clubs here.
+    "ска": ("ХК СКА", "SKA Saint Petersburg"),
+    "ska": ("SKA Saint Petersburg", "ХК СКА"),
+    "авангард": ("ХК Авангард", "Avangard Omsk"),
+    "avangard": ("Avangard Omsk", "ХК Авангард"),
+    "ак барс": ("ХК Ак Барс", "Ak Bars Kazan"),
+    "ak bars": ("Ak Bars Kazan", "ХК Ак Барс"),
+    "металлург": ("ХК Металлург (Магнитогорск)", "Metallurg Magnitogorsk"),
+    "metallurg": ("Metallurg Magnitogorsk", "ХК Металлург (Магнитогорск)"),
+    "салават": ("ХК Салават Юлаев", "Salavat Yulaev Ufa"),
+    "salavat": ("Salavat Yulaev Ufa", "ХК Салават Юлаев"),
+    "сибирь": ("ХК Сибирь", "HC Sibir Novosibirsk"),
+    "sibir": ("HC Sibir Novosibirsk", "ХК Сибирь"),
+    "трактор": ("ХК Трактор", "Traktor Chelyabinsk"),
+    "traktor": ("Traktor Chelyabinsk", "ХК Трактор"),
+}
+
+
 async def _resolve_sport_art(posters: PosterResolver, entry: Any) -> str:  # noqa: ANN401
     """Pick an image for a sport event card via Wikipedia.
 
@@ -587,50 +740,92 @@ async def _resolve_sport_art(posters: PosterResolver, entry: Any) -> str:  # noq
         for splitter in (" vs ", " - ", " — ", " – ", " v "):
             if splitter in low:
                 idx = low.find(splitter)
-                return [text[:idx].strip(), text[idx + len(splitter) :].strip()]
+                left = text[:idx].strip()
+                right = text[idx + len(splitter) :].strip()
+                # Strip EPG preamble like "Футбол. РПЛ. Спартак" →
+                # "Спартак". Preamble always ends in a period and is
+                # followed by the actual team name. Works for both
+                # Russian ("Хоккей. КХЛ. Ак Барс") and Latin hints.
+                if "." in left:
+                    left = left.rsplit(".", 1)[-1].strip()
+                return [left, right]
         return []
 
     def _club_variants(name: str) -> list[str]:
         """Produce football/hockey club search variants.
 
-        "Краснодар" alone hits the city article; "ФК Краснодар" hits
-        the football club. Which prefix applies depends on the sport
-        context extracted from the title/hint.
+        Russian clubs have canonical Wikipedia article titles with the
+        full "FC <Name> <City>" form on en.wiki and "ФК <Name> <City>"
+        on ru.wiki. Both resolve to the same crest. Bare names like
+        "Spartak" return random disambiguation hits (a film, an actor,
+        a player portrait); the explicit "FC Spartak Moscow" /
+        "ФК Спартак Москва" form returns the club crest reliably.
+
+        We look up a curated map first, then fall back to generic
+        prefixed variants.
         """
-        out = [name]
         n = name.strip().strip('"«»').strip()
         if not n:
-            return out
-        if any(
+            return []
+        out: list[str] = []
+        is_football = any(
             kw in combined
             for kw in ("футбол", "football", "soccer", "premier", "liga", "serie", "bundesliga")
-        ):
+        )
+        is_hockey = any(kw in combined for kw in ("хоккей", "hockey", "nhl", "кхл", "snl"))
+        # Sport-aware canonical lookup: hockey context picks the ХК/HC
+        # article for ambiguous names like "Спартак" (which has both an
+        # FC and an HC club), football context picks ФК/FC.
+        lkey = n.lower()
+        if is_hockey:
+            hockey_canon = _RU_HOCKEY_CLUB_CANONICAL.get(lkey)
+            if hockey_canon:
+                out.extend(hockey_canon)
+        football_canon = _RU_CLUB_CANONICAL.get(lkey)
+        if football_canon and not is_hockey:
+            out.extend(football_canon)
+        elif football_canon and is_hockey:
+            # Keep football canonical as late fallback — better than the
+            # bare name producing a random film/portrait.
+            out.extend(v for v in football_canon if v not in out)
+        out.append(n)
+        is_volley = any(kw in combined for kw in ("волейбол", "volleyball"))
+        is_basket = any(kw in combined for kw in ("баскетбол", "basketball", "nba"))
+        # For names we don't have in the curated map, still try Russian
+        # abbreviation prefixes (ФК/ХК/ВК/БК) — works for foreign clubs
+        # with ru.wiki articles like "ФК Барселона", "ФК Реал Мадрид".
+        if is_football:
             out.append(f"ФК {n}")
-        if any(kw in combined for kw in ("хоккей", "hockey", "nhl", "кхл", "snl")):
+        if is_hockey:
             out.append(f"ХК {n}")
-        if any(kw in combined for kw in ("волейбол", "volleyball")):
+        if is_volley:
             out.append(f"ВК {n}")
-        if any(kw in combined for kw in ("баскетбол", "basketball", "nba")):
+        if is_basket:
             out.append(f"БК {n}")
         return out
 
     queries: list[str] = []
 
-    # 1. League logo shortcuts — longest key first so "russian premier
-    # league" is tried before the bare "premier league".
+    # 1. Club crests FIRST — for a real matchup ("Спартак — Локомотив")
+    # we want the home team's crest, not the league logo. The canonical
+    # map gives full-article titles that reliably return the crest image
+    # via Wikipedia's summary endpoint.
+    halves = _halves(hint) or _halves(title)
+    for half in halves:
+        for variant in _club_variants(half):
+            if variant and variant not in queries:
+                queries.append(variant)
+
+    # 2. League logo — fallback when there are no halves (F1 race, UFC
+    # numbered card, tournament standings show) or when no half resolved
+    # to a club article. Longest key first so "russian premier league"
+    # beats the bare "premier league".
     for key in sorted(_SPORT_LEAGUE_WIKI_MAP, key=len, reverse=True):
         if key in combined:
             article = _SPORT_LEAGUE_WIKI_MAP[key]
             if article not in queries:
                 queries.append(article)
             break
-
-    # 2. Club variants (ФК/ХК/ВК prefixes) for each matchup half.
-    halves = _halves(hint) or _halves(title)
-    for half in halves:
-        for variant in _club_variants(half):
-            if variant and variant not in queries:
-                queries.append(variant)
 
     # 3. Raw fallbacks — original hint, original title.
     if hint and hint not in queries:
@@ -649,7 +844,53 @@ async def _resolve_sport_art(posters: PosterResolver, entry: Any) -> str:  # noq
         if hit:
             print(f"[sport-art] OK q={q!r} via {hit.source}", flush=True)
             return f"/api/ai/poster-image?src={quote(hit.url, safe='')}"
-    print(f"[sport-art] MISS title={title[:40]!r} tried={len(queries)}", flush=True)
+
+    # TMDB TV fallback — docuseries about a team/league give reasonable
+    # on-topic art when Wikipedia has nothing («Драйв выживания» for F1,
+    # «Вместе до конца» for Real Madrid). Only single-entity queries work
+    # — TMDB returns nothing for "X vs Y" matchup strings.
+    tmdb_queries: list[str] = []
+
+    def _push_tmdb(q: str) -> None:
+        q = q.strip().strip('"«»').strip()
+        if q and q not in tmdb_queries:
+            tmdb_queries.append(q)
+
+    _football_kw = ("футбол", "football", "soccer", "premier", "liga", "serie", "bundesliga")
+    _is_football = any(kw in combined for kw in _football_kw)
+    for half in halves:
+        _push_tmdb(half)
+        # Latin hints often come as team names the model wrote (e.g.
+        # "FC Barcelona"). Club prefixes raise TMDB recall too.
+        if _is_football and half and any(c.isascii() and c.isalpha() for c in half):
+            _push_tmdb(f"FC {half}")
+    for key in sorted(_SPORTSDB_LEAGUE_MAP, key=len, reverse=True):
+        if key in combined:
+            _push_tmdb(_SPORTSDB_LEAGUE_MAP[key])
+            break
+    # If the Latin hint has no splitter, try it whole — covers things like
+    # "UFC 300", "Formula 1 Monaco", "Wimbledon".
+    if hint and not halves and any(c.isascii() and c.isalpha() for c in hint):
+        _push_tmdb(hint)
+
+    for q in tmdb_queries:
+        try:
+            hit = await posters.resolve_tmdb_tv(q)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[sport-tmdb-tv] error q={q!r}: {exc}", flush=True)
+            continue
+        if hit:
+            print(f"[sport-tmdb-tv] OK q={q!r}", flush=True)
+            return f"/api/ai/poster-image?src={quote(hit.url, safe='')}"
+
+    # No Unsplash fallback for sport — generic stadium/arena photos
+    # were off-theme and indistinct ("хуета полная" per user). When
+    # Wikipedia crest + TMDB docuseries both miss, we return empty and
+    # let the frontend fall back to the blurred channel logo.
+    print(
+        f"[sport-art] MISS title={title[:40]!r} wiki={len(queries)} tmdb={len(tmdb_queries)}",
+        flush=True,
+    )
     return ""
 
 
