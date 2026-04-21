@@ -10,11 +10,19 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 
 from server.notify.telegram import TelegramClient, TelegramConfig, build_watch_url, escape
 from server.planner.store import Plan, PlanStore
 
 TICK_SECONDS = 60.0
+
+# Telegram notifications show wall-clock time for the user, not the
+# VPS server's UTC. Hard-coded to Europe/Moscow because that's the
+# operator / audience reality; swap to a per-user setting if we ever
+# serve multiple timezones. Broken out as a named constant so the
+# intent is obvious in grep.
+_USER_DISPLAY_TZ = ZoneInfo("Europe/Moscow")
 
 
 def _fmt_time(iso: str) -> str:
@@ -22,7 +30,7 @@ def _fmt_time(iso: str) -> str:
         dt = datetime.fromisoformat(iso)
     except ValueError:
         return iso
-    return dt.astimezone().strftime("%d.%m %H:%M")
+    return dt.astimezone(_USER_DISPLAY_TZ).strftime("%d.%m %H:%M МСК")
 
 
 def _caption_created(plan: Plan) -> str:
