@@ -208,12 +208,17 @@ def build_router(state: Any) -> APIRouter:  # noqa: ANN401 — state is the main
 
     @router.get("/ai/poster-image")
     async def poster_image(src: str = Query(..., min_length=8)) -> FileResponse:
-        """Download-and-cache TMDB / Wikipedia images locally.
+        """Serve a poster image. Prefetched files served directly; new
+        sources go through a hostname allowlist before downloading.
 
-        Only the two trusted CDNs are allowed — we won't become an open proxy
-        for arbitrary URLs. Cached files are keyed by sha1 of the full source
-        URL; extension is preserved where possible so browsers send the right
-        Accept.
+        DDG image search returns URLs from arbitrary CDNs on the web —
+        the resolver prefetches those into the local ``posters_img``
+        cache before returning the proxied URL. At serve time we check
+        the cache first and only fall back to network download for
+        URLs that match the curated list of trusted CDNs (TMDB,
+        Wikipedia, TheSportsDB). That way we stay safe as an image
+        proxy AND support DDG-sourced images without opening the
+        allowlist to the whole internet.
         """
         allowed_hosts = {
             "image.tmdb.org",
@@ -223,9 +228,6 @@ def build_router(state: Any) -> APIRouter:  # noqa: ANN401 — state is the main
             "www.thesportsdb.com",
         }
         parsed = urlparse(src)
-        if parsed.scheme != "https" or parsed.hostname not in allowed_hosts:
-            raise HTTPException(400, "image source not allowed")
-
         img_dir: Path = state.posters.root / "posters_img"
         img_dir.mkdir(parents=True, exist_ok=True)
         digest = hashlib.sha1(src.encode("utf-8")).hexdigest()
@@ -233,20 +235,6 @@ def build_router(state: Any) -> APIRouter:  # noqa: ANN401 — state is the main
         if ext not in (".jpg", ".jpeg", ".png", ".webp", ".gif"):
             ext = ".jpg"
         cache_path = img_dir / f"{digest}{ext}"
-
-        if not cache_path.exists():
-            try:
-                async with httpx.AsyncClient(
-                    timeout=10.0,
-                    follow_redirects=True,
-                    headers={"User-Agent": "m3u-studio/0.7 (poster-proxy)"},
-                ) as client:
-                    resp = await client.get(src)
-                    resp.raise_for_status()
-                    cache_path.write_bytes(resp.content)
-            except httpx.HTTPError as exc:
-                raise HTTPException(502, f"upstream fetch failed: {exc}") from exc
-
         media_map = {
             ".jpg": "image/jpeg",
             ".jpeg": "image/jpeg",
@@ -254,6 +242,33 @@ def build_router(state: Any) -> APIRouter:  # noqa: ANN401 — state is the main
             ".webp": "image/webp",
             ".gif": "image/gif",
         }
+
+        # Prefetched by the resolver — serve from disk without ever
+        # looking at the origin URL's hostname. The file only exists if
+        # our own code saved it there, so this isn't an open proxy.
+        if cache_path.exists() and cache_path.stat().st_size > 0:
+            return FileResponse(
+                cache_path,
+                media_type=media_map.get(ext, "image/jpeg"),
+                headers={"Cache-Control": "public, max-age=604800"},
+            )
+
+        # File isn't cached locally — fall back to downloading from the
+        # origin, but only for trusted hosts.
+        if parsed.scheme != "https" or parsed.hostname not in allowed_hosts:
+            raise HTTPException(400, "image source not allowed")
+        try:
+            async with httpx.AsyncClient(
+                timeout=10.0,
+                follow_redirects=True,
+                headers={"User-Agent": "m3u-studio/0.7 (poster-proxy)"},
+            ) as client:
+                resp = await client.get(src)
+                resp.raise_for_status()
+                cache_path.write_bytes(resp.content)
+        except httpx.HTTPError as exc:
+            raise HTTPException(502, f"upstream fetch failed: {exc}") from exc
+
         return FileResponse(
             cache_path,
             media_type=media_map.get(ext, "image/jpeg"),
@@ -940,16 +955,40 @@ _RU_VOLLEYBALL_CLUB_CANONICAL: dict[str, tuple[str, ...]] = {
 
 
 async def _resolve_sport_art(posters: PosterResolver, entry: Any) -> str:  # noqa: ANN401
-    """Pick an image for a sport event card via Wikipedia.
+    """Pick an image for a sport event card via DuckDuckGo image search.
 
-    Strategy (progressive fallback, stop on first hit):
-      1. Explicit league articles from a curated map (РПЛ, NHL, La Liga,
-         Champions League, Формула-1, UFC, etc.) — these reliably have
-         logos on Russian Wikipedia.
-      2. Each "X vs Y" half as a football club ("ФК ЦСКА" finds the
-         club article rather than the city). Also "ХК Динамо" for
-         hockey queries.
-      3. Raw halves and the full hint / title.
+    Per user feedback — our earlier Wiki/TMDB/TheSportsDB cascade was
+    too brittle for long-tail sport events ("Брага" → Tino Navarro,
+    "Шаровая молния" → ball-lightning cartoon). Sending the full
+    cleaned EPG title to DDG's image endpoint (which pools
+    Google/Bing/Yandex under the hood) reliably returns a thematic
+    on-event photo.
+
+    Query cleanup happens in ``_clean_sport_query`` — "Трансляция из
+    Грузии", "Страна: Германия, Аргентина, Уругвай.", commentator
+    parens, and trailing quotes are stripped so DDG receives only the
+    sport + league + teams / event name.
+    """
+    title = (entry.title or "").strip()
+    if not title:
+        return ""
+    try:
+        hit = await posters.resolve_sport_google(title)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[sport-art] ddg-fail title={title[:60]!r}: {exc}", flush=True)
+        return ""
+    if hit is None:
+        print(f"[sport-art] MISS title={title[:60]!r}", flush=True)
+        return ""
+    print(f"[sport-art] OK (ddg) title={title[:60]!r}", flush=True)
+    return f"/api/ai/poster-image?src={quote(hit.url, safe='')}"
+
+
+async def _resolve_sport_art_legacy(posters: PosterResolver, entry: Any) -> str:  # noqa: ANN401
+    """LEGACY multi-source sport-art resolver — kept only so the module
+    still holds the canonical maps + halves helpers other code paths
+    reference. Not called by the digest pipeline anymore; see
+    ``_resolve_sport_art`` above for the DDG-only path now in use.
     """
     hint = (entry.poster_keywords or "").strip()
     title = (entry.title or "").strip()

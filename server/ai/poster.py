@@ -24,6 +24,19 @@ TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/w780"
 TMDB_SEARCH_URL = "https://api.themoviedb.org/3/search/multi"
 TMDB_IMAGES_URL = "https://api.themoviedb.org/3/{media_type}/{id}/images"
 UNSPLASH_SEARCH_URL = "https://api.unsplash.com/search/photos"
+# DuckDuckGo image search — free, no API key, aggregates results from
+# multiple engines (Google/Bing/Yandex behind the scenes). Unofficial
+# endpoint but stable for years. Used as the PRIMARY source for sport
+# posters because the EPG title alone ("UFC Умар Нурмагомедов против
+# Дейвесона Фигередо") is already specific enough to rank well in
+# image search, while our TMDB / Wikipedia pipeline needs team- and
+# league-specific canonicals that don't exist for long-tail events.
+DDG_HOMEPAGE = "https://duckduckgo.com/"
+DDG_IMAGES_URL = "https://duckduckgo.com/i.js"
+DDG_BROWSER_UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15"
+)
 # TheSportsDB — open sports database. Events, team crests, league
 # logos. Free key "3" is explicitly provided for demo / small-site use
 # in their API docs (https://www.thesportsdb.com/api.php). Swap in a
@@ -247,6 +260,59 @@ class PosterResolver:
                     break
             if hit is not None:
                 await self.prefetch(hit.url, client=client)
+
+        async with self._lock:
+            self._mem[key] = (time.time(), hit)
+            self._save()
+        return hit
+
+    async def resolve_sport_google(self, query: str) -> PosterHit | None:
+        """Primary sport-poster resolver — DuckDuckGo image search.
+
+        DDG's image endpoint pools Google/Bing/Yandex results and has
+        no API-key requirement, so the full EPG title
+        ("Волейбол. Чемпионат России. Суперлига. ...") can go straight
+        in and the top hit is almost always a matching team / event
+        photo. Much better than our old TMDB/Wiki/TheSportsDB cascade
+        for long-tail sport events that aren't in any curated database.
+
+        Steps:
+          1. Strip EPG broadcast markers ("— Трансляция", "Страна: X",
+             "Трансляция из <Country>", commentator parens) so the
+             query carries only the sport + league + teams.
+          2. Fetch DuckDuckGo's homepage with ``q=query`` to harvest
+             the ``vqd`` session token their image API demands.
+          3. Call ``/i.js`` with the token; take the first result whose
+             image URL is downloadable.
+          4. Prefetch the image into the local cache so the frontend
+             proxy can serve it without opening the per-host allowlist
+             to arbitrary CDNs.
+        """
+        clean = _clean_sport_query(query)
+        if not clean:
+            return None
+        key = f"sport-google::{self._key(clean, 'ru')}"
+        cached = self._mem.get(key)
+        if cached:
+            ts, hit = cached
+            ttl = CACHE_TTL_SECONDS if hit else NEGATIVE_TTL_SECONDS
+            if time.time() - ts < ttl:
+                return hit
+
+        hit: PosterHit | None = None
+        try:
+            async with httpx.AsyncClient(
+                timeout=8.0,
+                follow_redirects=True,
+                headers={"User-Agent": DDG_BROWSER_UA},
+            ) as client:
+                vqd = await _ddg_fetch_vqd(client, clean)
+                if vqd:
+                    hit = await _ddg_search_image(client, clean, vqd)
+                    if hit is not None:
+                        await self.prefetch(hit.url, client=client)
+        except httpx.HTTPError as exc:
+            print(f"[sport-google] http-fail q={clean!r}: {exc}", flush=True)
 
         async with self._lock:
             self._mem[key] = (time.time(), hit)
@@ -1029,3 +1095,120 @@ def _sportsdb_league_variants(query: str) -> list[str]:
         if tokens:
             out.append(" ".join(tokens[:2]))
     return out
+
+
+# ---------------------------------------------------------------------------
+# Sport-query cleanup + DuckDuckGo image search
+# ---------------------------------------------------------------------------
+
+# EPG tails and descriptor phrases we strip before sending the title to
+# DuckDuckGo. Keeping "Трансляция из США" or "Страна: Германия,
+# Аргентина, Уругвай" in the query skews results toward country photos
+# / flags rather than the actual sport event.
+_SPORT_QUERY_TAIL_PATTERNS: tuple[str, ...] = (
+    r"\s*[—–-]\s*трансляц\S*\s*$",
+    r"\s*[—–-]\s*прямой эфир\s*$",
+    r"\s*[—–-]\s*прямая трансляция\s*$",
+    r"\s*[—–-]\s*в записи\s*$",
+    r"\s*[—–-]\s*повтор\S*\s*$",
+    r"\s*[—–-]\s*live\s*$",
+    r"\s*[—–-]\s*repeat\S*\s*$",
+    r"\s*[—–-]\s*страна\s*:.*$",
+    r"\s*[—–-]\s*регион\s*:.*$",
+    r"\s*[—–-]\s*место\s*:.*$",
+)
+# "Трансляция из <Country>" / "Прямая трансляция из <Country>" phrase
+# inlined anywhere in the sentence, not just at the tail.
+_SPORT_QUERY_INLINE_NOISE_RE = re.compile(
+    r"\b(?:прямая\s+)?трансляция\s+из\s+[\wё\-]+\s*\.?",
+    re.IGNORECASE,
+)
+
+
+def _clean_sport_query(title: str) -> str:
+    """Strip EPG broadcast markers, commentator parens, and dangling
+    punctuation so the query sent to Google/DuckDuckGo is only the
+    sport + league + teams / event name.
+
+    Keeps the full remaining title — no truncation — because DDG ranks
+    long descriptive queries well and the context ("Волейбол. Чемпионат
+    России.") keeps the first image result on-theme.
+    """
+    s = title.strip()
+    if not s:
+        return ""
+    for pat in _SPORT_QUERY_TAIL_PATTERNS:
+        s = re.sub(pat, "", s, flags=re.IGNORECASE)
+    s = _SPORT_QUERY_INLINE_NOISE_RE.sub(" ", s)
+    # Strip commentator parens (typically "(Имя Фамилия)" or
+    # "(Имя Фамилия, Имя Фамилия)" — any inner content 1-60 chars).
+    # Do this after tail stripping so the `\s*$` tail anchors match
+    # against the post-paren text.
+    s = re.sub(r"\s*\([^)]{1,60}\)", " ", s)
+    # Strip stray quote characters — they confuse DDG's tokenisation.
+    s = re.sub(r'["«»\'‘’“”]', "", s)
+    # Collapse whitespace / trailing punctuation.
+    s = re.sub(r"\s+", " ", s).strip()
+    s = re.sub(r"[\s.,;:]+$", "", s).strip()
+    return s
+
+
+async def _ddg_fetch_vqd(client: httpx.AsyncClient, query: str) -> str | None:
+    """Harvest the per-session ``vqd`` token DuckDuckGo's image endpoint
+    requires. The token is embedded in the homepage HTML returned for
+    a query; its exact format has drifted a few times (``vqd=3-…``,
+    ``vqd="4-…"``, ``vqd='4-…'``) so we try the common variants.
+    """
+    try:
+        resp = await client.get(DDG_HOMEPAGE, params={"q": query})
+        resp.raise_for_status()
+    except httpx.HTTPError:
+        return None
+    body = resp.text
+    for pattern in (
+        r'vqd\s*=\s*"([^"]+)"',
+        r"vqd\s*=\s*'([^']+)'",
+        r"vqd\s*=\s*([\d-]+)",
+    ):
+        match = re.search(pattern, body)
+        if match:
+            return match.group(1)
+    return None
+
+
+async def _ddg_search_image(
+    client: httpx.AsyncClient, query: str, vqd: str
+) -> PosterHit | None:
+    """Call DuckDuckGo's image-search JSON endpoint and return the first
+    usable hit. ``locale=ru-ru`` biases results toward Russian-language
+    sources which matches our EPG titles."""
+    try:
+        resp = await client.get(
+            DDG_IMAGES_URL,
+            params={
+                "q": query,
+                "o": "json",
+                "l": "ru-ru",
+                "f": ",,,,,",
+                "p": "1",
+                "vqd": vqd,
+            },
+            headers={
+                "Referer": DDG_HOMEPAGE,
+                "X-Requested-With": "XMLHttpRequest",
+            },
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except (httpx.HTTPError, ValueError):
+        return None
+    for result in (data.get("results") or [])[:5]:
+        url = result.get("image") or result.get("thumbnail")
+        if not url or not isinstance(url, str):
+            continue
+        if url.startswith("//"):
+            url = f"https:{url}"
+        if not url.startswith("https://"):
+            continue
+        return PosterHit(url=url, source="ddg-images")
+    return None
