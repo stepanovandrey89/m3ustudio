@@ -332,6 +332,80 @@ def _search_keywords(text: str) -> list[str]:
     return out
 
 
+# Broadcast-slot placeholders — 2-4 hour EPG blocks where the channel
+# hasn't published the concrete titles of the films / shows airing
+# inside ("Кино non-stop", "Хиты кино", "Сериалы подряд"). For the AI
+# assistant these are useless: the user asked for concrete recs, and
+# the slot carries no title to recommend. Drop them before the model
+# sees the schedule so it has to reach for channels with real titles.
+_EPG_PLACEHOLDER_TITLE_RE = re.compile(
+    r"^\s*(?:"
+    # "Кино" family — bare category, "non-stop", "подряд", "дня/вечера/ночи/недели"
+    r"кино(?:\s*non[-\s]*stop|\s+подряд|\s+дня|\s+вечера|\s+ночи|\s+недели)?"
+    r"|кино\s+24|кинозал|кинопоказ(?:\s+\w+)?|киномарафон"
+    # Quality-flavoured cinema blocks
+    r"|хиты\s+кино|кинохиты|лучшее\s+кино|новинки\s+кино|премьеры\s+кино"
+    # Generic slot labels
+    r"|художественн(?:ые|ый)\s+фильм(?:ы)?"
+    r"|фильм(?:\s+(?:вечера|дня|недели|месяца|сезона|года))?"
+    r"|премьер(?:а|ы)?(?:\s+(?:недели|месяца|сезона))?"
+    r"|сериал(?:ы)?(?:\s+подряд|\s+дня|\s+вечера|\s+ночи)?"
+    r"|мультфильм(?:ы)?\s+подряд|мультсериал(?:ы)?\s+подряд|мульт(?:ы)?\s+подряд"
+    r"|ночной\s+(?:киносеанс|сеанс|эфир|кинозал)"
+    r"|вечерн(?:ий|ее)\s+(?:киносеанс|кино|шоу)"
+    r"|дневн(?:ой|ое)\s+(?:киносеанс|кино)"
+    # English placeholders on international channels
+    r"|movies?\s+(?:non[-\s]*stop|marathon|block|hour|night)"
+    r"|films?\s+(?:non[-\s]*stop|marathon|block)"
+    r"|cinema\s+(?:non[-\s]*stop|block|hour)"
+    r"|prime\s+time\s+(?:movies?|cinema)"
+    r"|back[-\s]to[-\s]back\s+(?:movies?|films?|shows?)"
+    # Sport / generic category blocks (RU + EN)
+    r"|спорт\s+(?:non[-\s]*stop|подряд|дня|вечера)"
+    r"|футбол\s+(?:non[-\s]*stop|подряд|дня)"
+    r"|хоккей\s+(?:non[-\s]*stop|подряд)"
+    r"|(?:football|hockey|basketball|tennis|soccer|sports?)"
+    r"\s+(?:non[-\s]*stop|marathon|block|hour)"
+    r")\s*[.!]*\s*$",
+    re.IGNORECASE,
+)
+
+
+def is_placeholder_title(title: str) -> bool:
+    """True when a title is a generic broadcast-slot container with no
+    concrete programme name (e.g. "Кино non-stop", "Сериалы подряд").
+    Callers filter these out of schedules passed to the LLM so the
+    assistant can't recommend them as if they were specific shows.
+    """
+    if not title:
+        return True
+    stripped = title.strip()
+    if len(stripped) < 2:
+        return True
+    return bool(_EPG_PLACEHOLDER_TITLE_RE.match(stripped))
+
+
+def drop_placeholder_slots(
+    schedules: list[ChannelSchedule],
+) -> list[ChannelSchedule]:
+    """Filter every schedule to keep only programmes with a concrete
+    title. Channels that become empty after filtering drop out.
+    """
+    clean: list[ChannelSchedule] = []
+    for sch in schedules:
+        matching = tuple(p for p in sch.programmes if not is_placeholder_title(p.title))
+        if matching:
+            clean.append(
+                ChannelSchedule(
+                    channel_id=sch.channel_id,
+                    channel_name=sch.channel_name,
+                    group=sch.group,
+                    programmes=matching,
+                )
+            )
+    return clean
+
+
 def narrow_by_time_window(
     schedules: list[ChannelSchedule],
     window_start: datetime,

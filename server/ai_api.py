@@ -25,6 +25,7 @@ from server.ai.context import (
     build_main_schedule,
     channels_mentioned,
     detect_time_of_day,
+    drop_placeholder_slots,
     narrow_by_programme_content,
     narrow_by_time_window,
     resolve_tod_window,
@@ -217,6 +218,12 @@ def build_router(state: Any) -> APIRouter:  # noqa: ANN401 — state is the main
             sport_clean = _exclude_non_sport(schedules)
             if sport_clean:
                 schedules = sport_clean
+        # Strip EPG placeholder slots for every theme — container blocks
+        # like "Кино non-stop", "Хиты кино", "Сериалы подряд" have no
+        # concrete title so the digest can't link them to a poster.
+        schedules_no_placeholders = drop_placeholder_slots(schedules)
+        if schedules_no_placeholders:
+            schedules = schedules_no_placeholders
         print(
             f"[digest-debug] theme={theme_typed} schedules={len(schedules)} "
             f"channels={len(main_channels)}",
@@ -416,6 +423,15 @@ def build_router(state: Any) -> APIRouter:  # noqa: ANN401 — state is the main
         # routinely cuts the EPG block 5-10x.
         if len(scoped_channels) == len(main_channels):
             schedules = narrow_by_programme_content(last_user_msg, schedules)
+        # Strip EPG placeholder slots ("Кино non-stop", "Хиты кино",
+        # "Сериалы подряд"). These 2-4 h container slots have no
+        # concrete title for the assistant to recommend, but the small
+        # model happily recommends them anyway because they match the
+        # "фильм" keyword. Drop them before the model sees the slate —
+        # user wants concrete picks, not generic marathon blocks.
+        schedules_without_placeholders = drop_placeholder_slots(schedules)
+        if schedules_without_placeholders:
+            schedules = schedules_without_placeholders
         # Time-of-day narrow: strip programmes outside the asked window
         # so the model can't reach for an earlier/later slot.
         if tod_window is not None:

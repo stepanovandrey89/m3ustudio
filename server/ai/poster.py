@@ -705,11 +705,23 @@ def _query_variants(query: str) -> list[str]:
             out.append(v)
 
     original = query.strip()
+    lower = original.lower()
+    base_stripped = _STRIP_TAIL_RE.sub("", original).strip()
+    base_for_disambig = base_stripped or original
+
+    # For Cyrillic titles push "(фильм)" / "(сериал)" BEFORE the bare
+    # name. ru.wiki routes bare names to disambiguation pages more
+    # often than en.wiki (e.g. "Шаровая молния" → the ball-lightning
+    # physics article with its cartoon diagram instead of the 1965
+    # Bond film). Trying "Шаровая молния (фильм)" first hits the film
+    # article directly.
+    if _has_cyrillic(original) and "(" not in original:
+        push(f"{base_for_disambig} (фильм)")
+        push(f"{base_for_disambig} (сериал)")
+
     push(original)
 
     # Wikipedia disambiguation style: "Title (film)", "Title (TV series)".
-    lower = original.lower()
-    base_stripped = _STRIP_TAIL_RE.sub("", original).strip()
     if base_stripped and base_stripped.lower() != lower:
         if "tv series" in lower or "tv show" in lower or "сериал" in lower:
             push(f"{base_stripped} (TV series)")
@@ -726,16 +738,6 @@ def _query_variants(query: str) -> list[str]:
             break
         push(new)
         current = new
-
-    # Cyrillic titles without an explicit film/series marker still need
-    # the Russian disambiguation — we don't know which kind, so push
-    # both and let Wikipedia's 404 tell us which one is right.
-    if _has_cyrillic(original):
-        base_for_disambig = base_stripped or original
-        if "(фильм)" not in base_for_disambig.lower():
-            push(f"{base_for_disambig} (фильм)")
-        if "(сериал)" not in base_for_disambig.lower():
-            push(f"{base_for_disambig} (сериал)")
     return out
 
 
