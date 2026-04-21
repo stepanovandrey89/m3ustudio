@@ -420,6 +420,26 @@ class EpgGuide:
             return []
         return self._index.get(key, [])
 
+    def now_playing(self, channel_name: str) -> Programme | None:
+        """Return the programme currently airing for ``channel_name``,
+        or ``None`` if the EPG has no overlap with "now".
+
+        Lighter than ``window()`` — no list materialisation, no
+        ±timedelta expansion — used by batch endpoints that fetch
+        "what's on right now" for many channels per request.
+        """
+        progs = self.lookup(channel_name)
+        if not progs:
+            return None
+        now = datetime.now(UTC)
+        for p in progs:
+            if p.start <= now <= p.stop:
+                return p
+            if p.start > now:
+                # Sorted list → future programmes end the search.
+                break
+        return None
+
     def window(
         self,
         channel_name: str,

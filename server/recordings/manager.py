@@ -233,7 +233,11 @@ class RecordingManager:
             raise ValueError("Recording stop time is in the past")
 
         rec_id = f"{int(time.time())}-{_slug(title, 24)}-{uuid.uuid4().hex[:6]}"
-        file_name = f"{rec_id}.mkv"
+        # Capture directly into MP4 so the file is playable on mobile
+        # Safari / Chrome the moment the recording stops — no post-hoc
+        # remux pass needed. Fragmented MP4 flags make the file
+        # playable even if ffmpeg exits uncleanly (SIGTERM mid-stream).
+        file_name = f"{rec_id}.mp4"
         theme_value = theme if theme in VALID_THEMES else "other"
 
         entry = RecordingEntry(
@@ -246,6 +250,7 @@ class RecordingManager:
             stop=stop_dt.isoformat(),
             status="queued",
             file=file_name,
+            mp4_file=file_name,
             upstream_url=upstream_url,
             poster_url=poster_url,
             parts=[file_name],
@@ -305,7 +310,7 @@ class RecordingManager:
         duration = max(30, int((stop_dt - now).total_seconds()))
         duration = min(duration, MAX_DURATION_SECONDS)
         parts = self._parts_of(entry)
-        next_name = f"{rec_id}_p{len(parts) + 1}.mkv"
+        next_name = f"{rec_id}_p{len(parts) + 1}.mp4"
         new_parts = parts + [next_name]
         self._save(replace(entry, parts=new_parts, status="queued", error=""))
         async with self._lock:
@@ -385,6 +390,12 @@ class RecordingManager:
         self._save(replace(entry, status="running"))
 
         out_path = self._file_path(output_segment)
+        # Fragmented MP4: `frag_keyframe+empty_moov+default_base_moof`
+        # writes a streamable file that plays even if ffmpeg exits
+        # uncleanly (SIGTERM on watchdog or pause). `+faststart` moves
+        # the moov atom to the head for progressive playback on
+        # mobile Safari. Audio is transcoded to AAC because MP4
+        # doesn't permit AC-3 — video stays copy (zero re-encode).
         command = [
             self._ffmpeg,
             "-nostdin",
@@ -403,12 +414,20 @@ class RecordingManager:
             upstream_url,
             "-t",
             str(duration),
-            "-c",
+            "-c:v",
             "copy",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "160k",
             "-map",
-            "0",
+            "0:v:0?",
+            "-map",
+            "0:a:0?",
+            "-movflags",
+            "+faststart+frag_keyframe+empty_moov+default_base_moof",
             "-f",
-            "matroska",
+            "mp4",
             str(out_path),
         ]
 
@@ -586,7 +605,10 @@ class RecordingManager:
         if len(parts) == 1:
             size = self._file_path(parts[0]).stat().st_size
             duration = await self._total_duration(replace(entry, parts=parts))
-            mp4_name = await self._remux_to_mp4(rec_id, parts[0])
+            # New captures are already MP4; remux only runs for legacy
+            # MKV segments (recorded before the direct-to-MP4 switch).
+            is_mkv = parts[0].lower().endswith(".mkv")
+            mp4_name = await self._remux_to_mp4(rec_id, parts[0]) if is_mkv else parts[0]
             self._save(
                 replace(
                     entry,
@@ -601,15 +623,19 @@ class RecordingManager:
             )
             return
 
-        merged_name = f"{rec_id}.mkv"
+        merged_name = f"{rec_id}.mp4"
         if merged_name in parts:
-            merged_name = f"{rec_id}_merged.mkv"
+            merged_name = f"{rec_id}_merged.mp4"
         merged_path = self._file_path(merged_name)
         list_path = self._root / f".{rec_id}.concat.txt"
         list_path.write_text(
             "\n".join(f"file '{self._file_path(p).as_posix()}'" for p in parts),
             encoding="utf-8",
         )
+        # Concat streams are already MP4/AAC from capture; `-c copy`
+        # keeps the remux free of re-encode cost. `+faststart` puts
+        # the moov atom at the head so mobile browsers stream the
+        # concatenated file progressively.
         command = [
             self._ffmpeg,
             "-nostdin",
@@ -624,6 +650,8 @@ class RecordingManager:
             str(list_path),
             "-c",
             "copy",
+            "-movflags",
+            "+faststart",
             "-y",
             str(merged_path),
         ]
@@ -647,7 +675,6 @@ class RecordingManager:
                         self._file_path(p).unlink()
             size = merged_path.stat().st_size
             duration = await self._probe_duration(merged_path)
-            mp4_name = await self._remux_to_mp4(rec_id, merged_name)
             self._save(
                 replace(
                     entry,
@@ -656,7 +683,7 @@ class RecordingManager:
                     parts=[merged_name],
                     bytes=size,
                     duration_seconds=duration,
-                    mp4_file=mp4_name,
+                    mp4_file=merged_name,
                     error="",
                 )
             )
@@ -715,17 +742,18 @@ class RecordingManager:
             duration = min(duration, MAX_DURATION_SECONDS)
 
             if entry.status == "running":
-                # ffmpeg was mid-stream when the process died. The existing MKV
-                # has been finalised at SIGTERM time; start a new segment for
-                # the remainder so nothing already captured is overwritten.
+                # ffmpeg was mid-stream when the process died. The
+                # existing segment has been finalised at SIGTERM time;
+                # start a new segment for the remainder so nothing
+                # already captured is overwritten.
                 parts = self._parts_of(entry)
-                next_name = f"{entry.id}_p{len(parts) + 1}.mkv"
+                next_name = f"{entry.id}_p{len(parts) + 1}.mp4"
                 new_parts = parts + [next_name]
                 self._save(replace(entry, parts=new_parts, status="queued"))
                 segment_name = next_name
             else:  # queued
                 parts = self._parts_of(entry)
-                segment_name = parts[-1] if parts else f"{entry.id}.mkv"
+                segment_name = parts[-1] if parts else f"{entry.id}.mp4"
                 if not parts:
                     self._save(replace(entry, parts=[segment_name]))
 

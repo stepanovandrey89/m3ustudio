@@ -10,6 +10,7 @@ import type {
   EpgResponse,
   MainOperation,
   MainResponse,
+  NowPlayingResponse,
   Plan,
   PlansResponse,
   PlansStatusResponse,
@@ -47,6 +48,14 @@ export const api = {
     request<{ ok: boolean; total: number }>('/api/reload', { method: 'POST' }),
   getEpg: (channelId: string) =>
     request<EpgResponse>(`/api/epg/${encodeURIComponent(channelId)}`),
+  /** Batch 'what's on right now' for a list of channel IDs. One
+   *  HTTP round-trip returns the airing programme + its start/stop
+   *  for every channel that has EPG overlap with "now". Channels
+   *  missing from the response have no current programme. */
+  getEpgNow: (channelIds: string[]) => {
+    const qs = new URLSearchParams({ channels: channelIds.join(',') })
+    return request<NowPlayingResponse>(`/api/epg/now?${qs.toString()}`)
+  },
   startTranscode: (channelId: string) =>
     request<{ ok: boolean; manifest_url: string; started_at: number }>(
       `/api/transcode/${encodeURIComponent(channelId)}/start`,

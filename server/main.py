@@ -907,6 +907,38 @@ async def get_logo(channel_id: str) -> Response:
     )
 
 
+@app.get("/api/epg/now")
+def get_epg_now(channels: str = Query(default="")) -> JSONResponse:
+    """Batch 'what's on right now' lookup for the main-panel row UI.
+
+    ``channels`` is a comma-separated list of channel IDs. The
+    response carries ``{channel_id: {title, start, stop}}`` for every
+    channel that currently has a matching programme; ids missing from
+    the response have no overlap with "now" (idle, no EPG, etc). This
+    is lighter than the per-channel ``/api/epg/{id}`` because it
+    doesn't materialise a time window — each channel is a single
+    linear scan for the one airing programme.
+    """
+    ids = [c for c in (channels or "").split(",") if c.strip()]
+    if not ids:
+        return JSONResponse({"loaded": _state.epg.loaded, "items": {}})
+    out: dict[str, dict[str, str]] = {}
+    for cid in ids:
+        channel = _state.playlist.by_id(cid)
+        if channel is None:
+            continue
+        prog = _state.epg.now_playing(channel.name)
+        if prog is None:
+            continue
+        out[cid] = {
+            "title": prog.title,
+            "description": prog.description,
+            "start": prog.start.isoformat(),
+            "stop": prog.stop.isoformat(),
+        }
+    return JSONResponse({"loaded": _state.epg.loaded, "items": out})
+
+
 @app.get("/api/epg/{channel_id}")
 def get_epg(channel_id: str, past: int = 24, future: int = 24) -> JSONResponse:
     """Return programmes around 'now' for the given channel.

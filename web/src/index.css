@@ -30,7 +30,18 @@
 }
 
 @layer base {
+  /* Large-display scaling — every Tailwind size, spacing, and
+     component dimension is expressed in rem, so bumping the root
+     font-size at wider breakpoints inflates the whole UI
+     proportionally. Density stays the same; the app just "fills"
+     the viewport instead of rendering as a tiny island on a
+     4K / ultrawide monitor. 1rem === 16px on phones / laptops,
+     18px starting at 1920w, 20px at 2560w, 22px at 3200w.
+     Overridable via a `data-density` attribute on <html> if we
+     ever want a per-user toggle.
+  */
   :root {
+    font-size: 16px;
     color-scheme: dark;
 
     /* App-specific (non-Tailwind) tokens that vary with theme. */
@@ -42,6 +53,16 @@
     --glass-strong-bg: color-mix(in srgb, var(--color-ink-100) 60%, transparent);
     --glass-border: color-mix(in srgb, var(--color-fog-100) 9%, transparent);
     --glass-strong-border: color-mix(in srgb, var(--color-fog-100) 11%, transparent);
+  }
+
+  @media (min-width: 1920px) {
+    :root { font-size: 18px; }
+  }
+  @media (min-width: 2560px) {
+    :root { font-size: 20px; }
+  }
+  @media (min-width: 3200px) {
+    :root { font-size: 22px; }
   }
 
   :root[data-theme="light"] {

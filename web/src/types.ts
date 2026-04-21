@@ -63,6 +63,21 @@ export interface EpgResponse {
   programmes: Programme[]
 }
 
+/** Lightweight "what's airing right now" payload — one entry per
+ *  channel that has a current programme. Channels without EPG data
+ *  are simply absent from `items`. */
+export interface NowPlayingEntry {
+  title: string
+  description: string
+  start: string
+  stop: string
+}
+
+export interface NowPlayingResponse {
+  loaded: boolean
+  items: Record<string, NowPlayingEntry>
+}
+
 // ─── AI assistant ──────────────────────────────────────────────────────
 
 export type DigestTheme = 'sport' | 'cinema' | 'assistant'

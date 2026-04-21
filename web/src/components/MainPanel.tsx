@@ -13,7 +13,9 @@ import { useCallback, useMemo, useRef } from 'react'
 import { cn } from '../lib/cn'
 import { useI18n, translateGroup } from '../lib/i18n'
 import { useIsMobile } from '../hooks/useIsMobile'
-import type { Channel } from '../types'
+import { useNow } from '../hooks/useNow'
+import { useNowPlaying } from '../hooks/useNowPlaying'
+import type { Channel, NowPlayingEntry } from '../types'
 import { ChannelLogo } from './ChannelLogo'
 
 interface MainPanelProps {
@@ -46,6 +48,10 @@ export function MainPanel({
   const isMobile = useIsMobile()
   const { t } = useI18n()
   const ids = useMemo(() => channels.map((ch) => ch.id), [channels])
+  // What's airing right now on each channel. One batch request per
+  // minute covers the whole favourites list; rows read from the
+  // resulting map without firing their own requests.
+  const nowPlaying = useNowPlaying(ids)
 
   const { setNodeRef: setDropRef, isOver } = useDroppable({ id: 'main-panel' })
 
@@ -122,6 +128,7 @@ export function MainPanel({
                     index={idx + 1}
                     multiMode={multiMode}
                     selected={selected.has(ch.id)}
+                    nowPlaying={nowPlaying[ch.id]}
                     onToggleSelect={() => onToggleSelect(ch.id)}
                     onEnterMulti={() => onEnterMulti(ch.id)}
                     onRemove={() => onRemove(ch.id)}
@@ -176,6 +183,7 @@ interface SortableRowProps {
   index: number
   multiMode: boolean
   selected: boolean
+  nowPlaying?: NowPlayingEntry
   onToggleSelect: () => void
   onEnterMulti: () => void
   onRemove: () => void
@@ -187,12 +195,17 @@ function SortableRow({
   index,
   multiMode,
   selected,
+  nowPlaying,
   onToggleSelect,
   onEnterMulti,
   onRemove,
   onPreview,
 }: SortableRowProps) {
   const { lang } = useI18n()
+  // Tick every 30s so the live-progress fill redraws without polling
+  // the server. The batch "what's on now" endpoint is called from the
+  // parent panel once per minute and refreshes the programme identity.
+  const now = useNow(30_000)
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: channel.id, data: { type: 'main-channel' } })
 
@@ -272,10 +285,14 @@ function SortableRow({
 
       <div className="min-w-0 flex-1">
         <p className="truncate text-[13.5px] font-medium text-white">{channel.name}</p>
-        <p className="mt-0.5 truncate text-[11px] text-fog-100/50">
-          {translateGroup(channel.group, lang)}
-          {channel.tvg_id && ` · ${channel.tvg_id}`}
-        </p>
+        {nowPlaying ? (
+          <NowPlayingRow nowPlaying={nowPlaying} now={now} lang={lang} />
+        ) : (
+          <p className="mt-0.5 truncate text-[11px] text-fog-100/50">
+            {translateGroup(channel.group, lang)}
+            {channel.tvg_id && ` · ${channel.tvg_id}`}
+          </p>
+        )}
       </div>
 
       {!multiMode && (
@@ -292,5 +309,62 @@ function SortableRow({
         </button>
       )}
     </motion.li>
+  )
+}
+
+/** Compact live-programme strip — programme title + HH:MM–HH:MM time
+ *  window + progress bar. Redraws each `now` tick so the fill
+ *  advances without an API call. */
+function NowPlayingRow({
+  nowPlaying,
+  now,
+  lang,
+}: {
+  nowPlaying: NowPlayingEntry
+  now: Date
+  lang: string
+}) {
+  const startMs = useMemo(() => new Date(nowPlaying.start).getTime(), [nowPlaying.start])
+  const stopMs = useMemo(() => new Date(nowPlaying.stop).getTime(), [nowPlaying.stop])
+  const valid = Number.isFinite(startMs) && Number.isFinite(stopMs) && stopMs > startMs
+  const nowMs = now.getTime()
+  const progress = valid
+    ? Math.max(0, Math.min(1, (nowMs - startMs) / (stopMs - startMs)))
+    : 0
+  const formatter = useMemo(
+    () =>
+      new Intl.DateTimeFormat(lang === 'ru' ? 'ru-RU' : 'en-GB', {
+        hour: '2-digit',
+        minute: '2-digit',
+      }),
+    [lang],
+  )
+  const timeLabel = valid
+    ? `${formatter.format(new Date(startMs))}–${formatter.format(new Date(stopMs))}`
+    : ''
+
+  return (
+    <>
+      <p className="mt-0.5 flex items-center gap-1.5 truncate text-[11.5px] text-fog-100/80">
+        <span
+          aria-hidden
+          className="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-[var(--color-rose-primary)]"
+        />
+        <span className="truncate">{nowPlaying.title}</span>
+      </p>
+      <div className="mt-1 flex items-center gap-2">
+        <div className="relative h-[3px] flex-1 overflow-hidden rounded-full bg-white/10">
+          <div
+            className="h-full rounded-full bg-[var(--color-indigo-primary)]"
+            style={{ width: `${Math.round(progress * 100)}%` }}
+          />
+        </div>
+        {timeLabel && (
+          <span className="tabnum shrink-0 font-mono text-[10px] text-fog-100/50">
+            {timeLabel}
+          </span>
+        )}
+      </div>
+    </>
   )
 }
