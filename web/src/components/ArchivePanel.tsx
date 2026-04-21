@@ -377,7 +377,7 @@ function RecordingCard({
                   {t('archive_play')}
                 </button>
                 <a
-                  href={api.recordingFileUrl(rec.id)}
+                  href={api.recordingDownloadUrl(rec.id)}
                   download
                   className="flex items-center gap-1.5 rounded-full border border-white/20 bg-black/30 px-3 py-1.5 text-[12px] text-white/90 backdrop-blur-sm transition hover:border-white/40 hover:text-white"
                 >

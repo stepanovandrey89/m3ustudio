@@ -411,33 +411,48 @@ def build_router(state: Any) -> APIRouter:  # noqa: ANN401 — state is the main
         return JSONResponse({"ok": True})
 
     @router.get("/recordings/{rec_id}/file")
-    def recording_file(rec_id: str) -> FileResponse:
+    def recording_file(rec_id: str, download: bool = Query(default=False)) -> FileResponse:
+        """Serve a recording either INLINE (for `<video>` playback) or
+        as a named attachment (for the Download button).
+
+        By default, FastAPI's ``FileResponse(filename=...)`` appends
+        ``Content-Disposition: attachment`` which forces mobile Safari
+        and Chrome on Android to save the file instead of playing it
+        — the user sees a stalled progress bar because the browser
+        never hands the bytes to the video element. The ``<video>``
+        tag on the frontend hits this endpoint without ``?download=1``
+        so the response carries no ``Content-Disposition`` at all,
+        letting the browser recognise the MIME type and stream inline.
+        The Download anchor passes ``?download=1`` to get the named
+        attachment behaviour.
+        """
         entry = recordings.get(rec_id)
         if entry is None:
             raise HTTPException(404, "Recording not found")
         # Prefer the MP4 remux when the post-processing pass produced
-        # one — mobile Safari + Chrome on Android can't decode MKV,
-        # showing an empty progress bar instead of playback. MP4 with
-        # +faststart starts progressively on any browser. Falls back
-        # to MKV when the remux hasn't run yet (legacy entries) or
-        # failed (exotic codecs).
+        # one — mobile Safari + Chrome on Android can't decode MKV.
+        # MP4 with +faststart starts progressively on any browser.
         mp4_name = getattr(entry, "mp4_file", "") or ""
         if mp4_name:
             mp4_path = recordings.root / mp4_name
             if mp4_path.exists():
-                return FileResponse(
-                    mp4_path,
-                    media_type="video/mp4",
-                    filename=f"{entry.title or entry.id}.mp4",
-                )
+                if download:
+                    return FileResponse(
+                        mp4_path,
+                        media_type="video/mp4",
+                        filename=f"{entry.title or entry.id}.mp4",
+                    )
+                return FileResponse(mp4_path, media_type="video/mp4")
         path = recordings.root / entry.file
         if not path.exists():
             raise HTTPException(404, "File not on disk")
-        return FileResponse(
-            path,
-            media_type="video/x-matroska",
-            filename=f"{entry.title or entry.id}.mkv",
-        )
+        if download:
+            return FileResponse(
+                path,
+                media_type="video/x-matroska",
+                filename=f"{entry.title or entry.id}.mkv",
+            )
+        return FileResponse(path, media_type="video/x-matroska")
 
     @router.get("/recordings/{rec_id}/part/{index}")
     def recording_part(rec_id: str, index: int) -> FileResponse:

@@ -280,13 +280,18 @@ export function DailyDigest({ enabled, onPlan, onRecord, onWatch }: DailyDigestP
   )
 
   useEffect(() => {
-    // Always call fetchDigest when content is missing — its internal dedupe
-    // piggy-backs on any in-flight request from a previous mount instead of
-    // launching a new one.
-    if (enabled && !cache[active]) {
+    // Server is the single source of truth for digest state — every
+    // device must converge to whatever is currently on disk in
+    // ai_cache/digest-{theme}-{lang}.json. localStorage only provides
+    // instant-paint for the previous session; we STILL hit the server
+    // on every mount / theme switch so one person refreshing updates
+    // everyone else on the next page load. Dedupe inside fetchDigest
+    // piggy-backs on an in-flight request when two mounts race.
+    if (enabled) {
       void fetchDigest(active)
     }
-  }, [active, cache, enabled, fetchDigest])
+    // eslint-disable-next-line react-hooks/exhaustive-deps — intentional
+  }, [active, enabled, fetchDigest])
 
   // Language-specific content: when the user flips RU ↔ EN, drop the
   // previously-loaded digests (which are in the old locale) and reseed

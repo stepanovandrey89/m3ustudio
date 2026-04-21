@@ -142,6 +142,11 @@ export const api = {
       method: 'POST',
     }),
   recordingFileUrl: (id: string) => `/api/recordings/${encodeURIComponent(id)}/file`,
+  /** Download variant — adds ?download=1 so the server sets
+   *  Content-Disposition: attachment. The plain URL stays inline
+   *  so mobile Safari / Chrome can stream it into <video>. */
+  recordingDownloadUrl: (id: string) =>
+    `/api/recordings/${encodeURIComponent(id)}/file?download=1`,
   // Safety belt: the AI occasionally ships channel_id as "(id=hex)" — strip
   // the wrapping before any URL that uses it.
   cleanChannelId: (raw: string): string => {
