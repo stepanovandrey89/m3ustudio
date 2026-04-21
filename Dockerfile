@@ -5,14 +5,14 @@ FROM node:22-alpine AS web-builder
 
 WORKDIR /app/web
 
-# Install pnpm via corepack (shipped with node:22)
-RUN corepack enable && corepack prepare pnpm@latest --activate
-
-COPY web/package.json web/pnpm-lock.yaml ./
-RUN pnpm install --frozen-lockfile
+# Install deps with npm — the repo ships package-lock.json, not a
+# pnpm-lock.yaml. Docker build previously failed cache-resolution on
+# the missing pnpm lockfile.
+COPY web/package.json web/package-lock.json ./
+RUN npm ci --no-audit --no-fund
 
 COPY web/ ./
-RUN pnpm build
+RUN npm run build
 
 # ─── Stage 2: python runtime ─────────────────────────────────────────────
 FROM python:3.12-slim AS runtime
