@@ -46,29 +46,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: pnpm/action-setup@v4
-        with:
-          version: latest
-          run_install: false
-
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: pnpm
-          cache-dependency-path: web/pnpm-lock.yaml
+          cache: npm
+          cache-dependency-path: web/package-lock.json
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: npm install --no-audit --no-fund
 
       - name: Typecheck
-        run: pnpm tsc --noEmit
+        run: npx tsc --noEmit
 
       - name: Lint
-        run: pnpm eslint . --max-warnings=0
+        run: npx eslint . --max-warnings=0
         continue-on-error: true
 
       - name: Build
-        run: pnpm build
+        run: npm run build
 
   docker:
     name: Docker · build image
