@@ -289,6 +289,19 @@ async def _startup() -> None:
     # from disk so a restart mid-window doesn't silently drop scheduled ffmpeg captures.
     with contextlib.suppress(Exception):
         await _state.recordings.resume_pending()
+    # One-off migration: produce MP4 siblings for any finalised MKV
+    # recording that doesn't have one yet. Mobile Safari / Chrome on
+    # Android can't play MKV, so this backfill is the difference
+    # between "old recording plays" and "empty progress bar".
+    # Runs in the background so startup isn't blocked on ffmpeg.
+    asyncio.create_task(_backfill_recording_mp4())
+
+
+async def _backfill_recording_mp4() -> None:
+    with contextlib.suppress(Exception):
+        count = await _state.recordings.backfill_mp4()
+        if count:
+            print(f"[recordings] backfilled {count} MP4 sibling(s)", flush=True)
 
 
 async def _load_epg_in_background(main_names: set[str] | None = None) -> None:

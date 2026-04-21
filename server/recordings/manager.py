@@ -64,6 +64,12 @@ class RecordingEntry:
     # measured" (e.g. still recording); UI falls back to the <video> metadata.
     duration_seconds: float = 0.0
     created_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
+    # MP4-container remux of the finalised recording — mobile Safari and
+    # Chrome can't reliably play MKV, so after _mark_done we produce an
+    # MP4 sibling via `ffmpeg -c copy -movflags +faststart` (near-zero
+    # cost, no re-encode). Empty string when the remux hasn't run yet
+    # or failed; the /file endpoint falls back to `file` in that case.
+    mp4_file: str = ""
 
     def to_dict(self) -> dict[str, object]:
         return dict(asdict(self))
@@ -494,6 +500,71 @@ class RecordingManager:
         async with self._lock:
             self._tasks.pop(rec_id, None)
 
+    async def _remux_to_mp4(self, rec_id: str, mkv_name: str) -> str:
+        """Produce an MP4 copy of the finalised MKV for mobile playback.
+
+        iOS Safari / Chrome on Android can't decode the MKV container —
+        the video element renders an empty progress bar because the
+        stream never initialises. Remuxing to MP4 with
+        ``-movflags +faststart`` moves the moov atom to the head of the
+        file so progressive playback begins immediately. Streams are
+        copied without re-encoding (close to disk-write speed).
+
+        Tries ``-c copy`` first. If that fails — most commonly because
+        the source carries AC-3 audio which MP4 doesn't permit — falls
+        back to ``-c:v copy -c:a aac`` to transcode only the audio track.
+
+        Returns the MP4 filename on success, empty string on any failure
+        so the caller keeps the MKV as the only playable file.
+        """
+        mkv_path = self._file_path(mkv_name)
+        if not mkv_path.exists():
+            return ""
+        mp4_name = f"{rec_id}.mp4"
+        mp4_path = self._file_path(mp4_name)
+        base_cmd = [
+            self._ffmpeg,
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "warning",
+            "-i",
+            str(mkv_path),
+            "-map",
+            "0",
+            "-movflags",
+            "+faststart",
+            "-y",
+            str(mp4_path),
+        ]
+        # Pass 1 — full copy (works for H.264/AAC, most IPTV streams).
+        for codec_args in (["-c", "copy"], ["-c:v", "copy", "-c:a", "aac", "-b:a", "160k"]):
+            cmd = base_cmd[:-1] + codec_args + ["-y", str(mp4_path)]
+            # base_cmd already had -y / str(mp4_path); rebuild with codec
+            # args inserted before the output path.
+            cmd = (
+                base_cmd[:-2]  # drop -y + output
+                + codec_args
+                + ["-y", str(mp4_path)]
+            )
+            try:
+                process = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                )
+                _, err = await process.communicate()
+            except (OSError, FileNotFoundError):
+                return ""
+            if process.returncode == 0 and mp4_path.exists() and mp4_path.stat().st_size > 0:
+                return mp4_name
+            # Remove the broken partial from the previous attempt before
+            # trying the fallback so a tiny file doesn't masquerade as OK.
+            with contextlib.suppress(OSError):
+                mp4_path.unlink()
+        return ""
+
     async def _mark_done(self, rec_id: str) -> None:
         """Flip status to `done` and collapse segments into one MKV.
 
@@ -515,6 +586,7 @@ class RecordingManager:
         if len(parts) == 1:
             size = self._file_path(parts[0]).stat().st_size
             duration = await self._total_duration(replace(entry, parts=parts))
+            mp4_name = await self._remux_to_mp4(rec_id, parts[0])
             self._save(
                 replace(
                     entry,
@@ -523,6 +595,7 @@ class RecordingManager:
                     parts=parts,
                     bytes=size,
                     duration_seconds=duration,
+                    mp4_file=mp4_name,
                     error="",
                 )
             )
@@ -574,6 +647,7 @@ class RecordingManager:
                         self._file_path(p).unlink()
             size = merged_path.stat().st_size
             duration = await self._probe_duration(merged_path)
+            mp4_name = await self._remux_to_mp4(rec_id, merged_name)
             self._save(
                 replace(
                     entry,
@@ -582,6 +656,7 @@ class RecordingManager:
                     parts=[merged_name],
                     bytes=size,
                     duration_seconds=duration,
+                    mp4_file=mp4_name,
                     error="",
                 )
             )
@@ -671,3 +746,35 @@ class RecordingManager:
         for t in tasks:
             with contextlib.suppress(Exception):
                 await t
+
+    async def backfill_mp4(self) -> int:
+        """Remux any finalised MKV that's missing an MP4 sibling.
+
+        Recordings made before the MP4-output migration only have the
+        MKV on disk — mobile browsers can't play those. Iterate all
+        ``done`` entries, remux the ones missing ``mp4_file``, and
+        update the sidecar JSON so the ``/file`` endpoint starts
+        serving MP4. Safe to run every startup; entries already
+        carrying a valid ``mp4_file`` are skipped. Returns the count
+        of newly-remuxed files.
+
+        Runs sequentially so we don't slam the server with parallel
+        ffmpeg passes on startup. Each remux is near-zero cost
+        (``-c copy``) so even a few dozen recordings finish in seconds.
+        """
+        remuxed = 0
+        for entry in self.list():
+            if entry.status != "done":
+                continue
+            if entry.mp4_file:
+                mp4_path = self._file_path(entry.mp4_file)
+                if mp4_path.exists() and mp4_path.stat().st_size > 0:
+                    continue
+            mkv_name = entry.file or (entry.parts[0] if entry.parts else "")
+            if not mkv_name or not self._file_path(mkv_name).exists():
+                continue
+            produced = await self._remux_to_mp4(entry.id, mkv_name)
+            if produced:
+                self._save(replace(entry, mp4_file=produced))
+                remuxed += 1
+        return remuxed

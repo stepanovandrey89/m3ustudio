@@ -415,6 +415,21 @@ def build_router(state: Any) -> APIRouter:  # noqa: ANN401 — state is the main
         entry = recordings.get(rec_id)
         if entry is None:
             raise HTTPException(404, "Recording not found")
+        # Prefer the MP4 remux when the post-processing pass produced
+        # one — mobile Safari + Chrome on Android can't decode MKV,
+        # showing an empty progress bar instead of playback. MP4 with
+        # +faststart starts progressively on any browser. Falls back
+        # to MKV when the remux hasn't run yet (legacy entries) or
+        # failed (exotic codecs).
+        mp4_name = getattr(entry, "mp4_file", "") or ""
+        if mp4_name:
+            mp4_path = recordings.root / mp4_name
+            if mp4_path.exists():
+                return FileResponse(
+                    mp4_path,
+                    media_type="video/mp4",
+                    filename=f"{entry.title or entry.id}.mp4",
+                )
         path = recordings.root / entry.file
         if not path.exists():
             raise HTTPException(404, "File not on disk")
