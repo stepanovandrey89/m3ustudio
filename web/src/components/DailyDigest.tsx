@@ -389,7 +389,14 @@ export function DailyDigest({ enabled, onPlan, onRecord, onWatch }: DailyDigestP
       {/* Cards grid */}
       <div className="flex-1">
         <AnimatePresence mode="wait">
-          {isLoading && !digest ? (
+          {/* Server is still generating AND we have no items yet — the
+              previous condition also asked for digest==null, which hid
+              the spinner the moment the first poll returned (empty
+              items + generating=true) and fell through to the "Ничего
+              не нашлось" branch instead. Now we keep the loading grid
+              up for any state that combines loading/generating with
+              zero items. */}
+          {(isLoading || digest?.generating) && (digest?.items.length ?? 0) === 0 ? (
             <LoadingGrid key="loading" accent={activeTheme.accent} />
           ) : digest && digest.items.length > 0 ? (
             <DigestGrid
@@ -743,7 +750,7 @@ function LoadingGrid({ accent }: { accent: string }) {
       ))}
       <div className="col-span-full flex items-center justify-center gap-2 py-4 text-[12px] text-fog-200/60">
         <Loader2 className="h-4 w-4 animate-spin" />
-        {t('digest_refresh')}…
+        {t('digest_generating')}
       </div>
     </motion.div>
   )

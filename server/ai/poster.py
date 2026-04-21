@@ -143,6 +143,7 @@ class PosterResolver:
         lang: str = "ru",
         *,
         allow_commons: bool = False,
+        skip_fuzzy: bool = False,
     ) -> PosterHit | None:
         """Resolve a poster.
 
@@ -150,6 +151,14 @@ class PosterResolver:
         for sport (team crests, league logos) where Commons hosts the
         correct identity art. For film content keep it False; Commons
         there yields actor portraits that look wrong as film posters.
+
+        ``skip_fuzzy=True`` disables Wikipedia's fuzzy search pass, so
+        only exact article matches count as hits. Used on the sport
+        path where a fuzzy Wiki hit on a bare surname like "Брага" or
+        "Фамаликан" returns an unrelated person/city article instead
+        of the football-club crest. When the canonical map lookup
+        misses, we'd rather cascade to TheSportsDB / TMDB than accept
+        a random Wiki hit.
         """
         clean = keywords.strip()
         if not clean:
@@ -157,6 +166,8 @@ class PosterResolver:
         key = self._key(clean, lang)
         if allow_commons:
             key = f"{key}::commons"
+        if skip_fuzzy:
+            key = f"{key}::exact"
         cached = self._mem.get(key)
         if cached:
             ts, hit = cached
@@ -164,7 +175,9 @@ class PosterResolver:
             if time.time() - ts < ttl:
                 return hit
 
-        hit = await self._fetch(clean, lang, allow_commons=allow_commons)
+        hit = await self._fetch(
+            clean, lang, allow_commons=allow_commons, skip_fuzzy=skip_fuzzy
+        )
         async with self._lock:
             self._mem[key] = (time.time(), hit)
             self._save()
@@ -381,6 +394,7 @@ class PosterResolver:
         lang: str,
         *,
         allow_commons: bool = False,
+        skip_fuzzy: bool = False,
     ) -> PosterHit | None:
         async with httpx.AsyncClient(
             timeout=4.0,
@@ -399,13 +413,45 @@ class PosterResolver:
             if self._tmdb_key:
                 hit = await _tmdb_search(client, keywords, lang, self._tmdb_key)
             if hit is None:
-                hit = await _wiki_lookup(client, keywords, lang, allow_commons=allow_commons)
+                hit = await _wiki_lookup(
+                    client,
+                    keywords,
+                    lang,
+                    allow_commons=allow_commons,
+                    skip_fuzzy=skip_fuzzy,
+                )
             if hit is not None:
                 # Pre-fetch the image so the frontend's first render hits a
                 # file on disk instead of racing with the TMDB/Wiki round-trip.
                 # Failure here is silent — the proxy endpoint will retry.
                 await self.prefetch(hit.url, client=client)
             return hit
+
+
+# Regex that strips Wikipedia-style parenthetical disambiguation from
+# a query — "Блеф (фильм)" → "Блеф". TMDB's search tokeniser treats
+# the parens as literal search terms so passing "(фильм)" through it
+# fuzz-matches to random Russian films. Wikipedia, on the other hand,
+# uses these suffixes as canonical article titles and DOES want them.
+_TMDB_DISAMBIG_STRIP_RE = re.compile(
+    r"\s*\((?:фильм|сериал|телесериал|мультфильм|мультсериал|film|movie|tv\s+series|tv\s+show)\)\s*",
+    re.IGNORECASE,
+)
+
+
+def _tmdb_queries(keywords: str) -> list[str]:
+    """Query variants for TMDB — all `(фильм)` / `(film)` style
+    disambiguation is stripped. Deduplicated while preserving order.
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in _query_variants(keywords):
+        stripped = _TMDB_DISAMBIG_STRIP_RE.sub(" ", raw)
+        stripped = re.sub(r"\s+", " ", stripped).strip()
+        if stripped and stripped not in seen:
+            seen.add(stripped)
+            out.append(stripped)
+    return out
 
 
 async def _tmdb_search(
@@ -430,7 +476,7 @@ async def _tmdb_search(
     """
     pref = "ru" if lang == "ru" else "en"
 
-    for query in _query_variants(keywords):
+    for query in _tmdb_queries(keywords):
         params = {
             "api_key": api_key,
             "query": query,
@@ -533,6 +579,7 @@ async def _wiki_lookup(
     lang: str,
     *,
     allow_commons: bool = False,
+    skip_fuzzy: bool = False,
 ) -> PosterHit | None:
     """Resolve a Wikipedia image via three cascading strategies.
 
@@ -541,6 +588,12 @@ async def _wiki_lookup(
     because Wikipedia's fuzzy page-image API returns actor portraits on
     ambiguous film queries. For sport ``allow_commons=True`` opens it
     up — team crests, league logos and event trophies live on Commons.
+
+    ``skip_fuzzy=True`` disables the final fuzzy search pass, used by
+    sport callers where a miss on exact article titles should cascade
+    to TheSportsDB instead of accepting whatever article happens to
+    fuzzy-match ("Брага" → a person's headshot). Exact lookups
+    (`_wiki_summary` + `_wiki_direct`) still run.
     """
 
     def acceptable(url: str | None) -> bool:
@@ -569,12 +622,15 @@ async def _wiki_lookup(
             if acceptable(url):
                 return PosterHit(url=url, source="wikipedia")
 
-    # 3. Fuzzy search — last resort when no exact page matches.
-    for query in _query_variants(stripped):
-        for wiki_lang in order:
-            url = await _wiki_search(client, query, wiki_lang)
-            if acceptable(url):
-                return PosterHit(url=url, source="wikipedia")
+    # 3. Fuzzy search — last resort when no exact page matches. Skipped
+    # for sport callers (see docstring) because bare surnames and
+    # ambiguous city names routinely pull up the wrong Commons image.
+    if not skip_fuzzy:
+        for query in _query_variants(stripped):
+            for wiki_lang in order:
+                url = await _wiki_search(client, query, wiki_lang)
+                if acceptable(url):
+                    return PosterHit(url=url, source="wikipedia")
 
     # 4. "X vs Y" — try each half (useful for sports matchups without a
     # dedicated article; gives us a team crest or event logo).
@@ -591,10 +647,11 @@ async def _wiki_lookup(
                     direct = await _wiki_direct(client, half, wiki_lang)
                     if direct:
                         return PosterHit(url=direct, source="wikipedia")
-                for wiki_lang in order:
-                    srch = await _wiki_search(client, half, wiki_lang)
-                    if srch:
-                        return PosterHit(url=srch, source="wikipedia")
+                if not skip_fuzzy:
+                    for wiki_lang in order:
+                        srch = await _wiki_search(client, half, wiki_lang)
+                        if srch:
+                            return PosterHit(url=srch, source="wikipedia")
             break
 
     return None

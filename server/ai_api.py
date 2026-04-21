@@ -750,7 +750,23 @@ _RU_CLUB_CANONICAL: dict[str, tuple[str, ...]] = {
     "marseille": ("Olympique de Marseille", "Олимпик Марсель"),
     "lyon": ("Olympique Lyonnais", "Олимпик Лион"),
     "benfica": ("S.L. Benfica", "Бенфика"),
-    "porto": ("FC Porto", "Порту"),
+    "бенфика": ("Бенфика", "S.L. Benfica"),
+    "porto": ("FC Porto", "Порту (футбольный клуб)"),
+    "порту": ("Порту (футбольный клуб)", "FC Porto"),
+    "sporting": ("Sporting CP", "Спортинг (Лиссабон)"),
+    "спортинг": ("Спортинг (Лиссабон)", "Sporting CP"),
+    "braga": ("S.C. Braga", "Брага (футбольный клуб)"),
+    "брага": ("Брага (футбольный клуб)", "S.C. Braga"),
+    "famalicao": ("F.C. Famalicão", "Фамаликан"),
+    "фамаликан": ("Фамаликан", "F.C. Famalicão"),
+    "vitoria": ("Vitória S.C.", "Витория (Гимарайнш)"),
+    "витория": ("Витория (Гимарайнш)", "Vitória S.C."),
+    "gil vicente": ("Gil Vicente F.C.", "Жил Висенте"),
+    "boavista": ("Boavista F.C.", "Боавишта"),
+    "боавишта": ("Боавишта", "Boavista F.C."),
+    "rio ave": ("Rio Ave F.C.", "Риу Аве"),
+    "maritimo": ("C.S. Marítimo", "Маритиму"),
+    "маритиму": ("Маритиму", "C.S. Marítimo"),
     "ajax": ("AFC Ajax", "Аякс"),
     "psv": ("PSV Eindhoven", "ПСВ"),
     "galatasaray": ("Galatasaray S.K.", "Галатасарай"),
@@ -781,10 +797,54 @@ _RU_CLUB_CANONICAL: dict[str, tuple[str, ...]] = {
 # "Реал Мадрид — Прямой эфир") fall to fuzzy Wikipedia search and
 # return the wrong article ("Трансляция" is a page of its own).
 _EPG_TAIL_RE = re.compile(
-    r"\s*[—–-]\s*(?:трансляц\S*|прямой эфир|прямая трансляция|в записи|повтор\S*|repeat|live)"
-    r"\s*$",
+    r"\s*[—–-]\s*(?:"
+    r"трансляц\S*|прямой эфир|прямая трансляция|в записи|повтор\S*|repeat|live"
+    r"|страна\s*:.*|трансляция\s+из\s+\S+|прямая\s+трансляция\s+из\s+\S+"
+    r")\s*$",
     re.IGNORECASE,
 )
+# Halves the _halves splitter produces that clearly aren't team names —
+# whole phrases like "Страна: Германия, Аргентина, Уругвай" or "Трансляция
+# из Грузии" leak into one side of the split when the EPG title carries
+# a " — " separator that isn't a matchup. Reject halves when either side
+# tripped these markers; caller then falls through to the league-level
+# lookup instead of searching Wikipedia for random phrases.
+_NON_TEAM_MARKERS: tuple[str, ...] = (
+    "трансляц",
+    "прямой эфир",
+    "прямая трансляция",
+    "в записи",
+    "страна:",
+    "страна :",
+    "регион:",
+    "место:",
+    "репортаж",
+    "live",
+    "repeat",
+    "повтор",
+    "чемпионат ",
+    "кубок ",
+    "турнир ",
+    "этап ",
+    "гран-при",
+    "финал ",
+    "полуфинал",
+    "четвертьфинал",
+    "плей-офф",
+    "квалификация",
+)
+
+
+def _half_looks_like_team(h: str) -> bool:
+    """Quick sanity check for a `_halves` output — reject anything that
+    reads like an EPG description phrase rather than a team name.
+    """
+    if not h or len(h.strip()) < 2:
+        return False
+    low = h.lower()
+    if ":" in h:
+        return False
+    return not any(marker in low for marker in _NON_TEAM_MARKERS)
 _EPG_PARENS_RE = re.compile(r"\s*\([^)]{1,60}\)\s*$")
 # Parens that look like city / location hints — single capitalised word
 # or hyphenated compound ("Санкт-Петербург", "Новосибирск", "Нижний
@@ -963,10 +1023,13 @@ async def _resolve_sport_art(posters: PosterResolver, entry: Any) -> str:  # noq
                 "чемпионат турции",
                 "super lig",
                 "суперлига турции",
+                "primeira liga",
+                "чемпионат португалии",
                 "кубок испании",
                 "кубок франции",
                 "кубок германии",
                 "кубок англии",
+                "кубок португалии",
                 "мир российская",
                 "российская премьер",
                 "рпл",
@@ -1041,6 +1104,19 @@ async def _resolve_sport_art(posters: PosterResolver, entry: Any) -> str:  # noq
         return out
 
     halves = _halves(hint) or _halves(title)
+    # Reject halves that obviously aren't teams — e.g. "Трансляция из
+    # Грузии — Трансляция" splits to ["Трансляция из Грузии",
+    # "Трансляция"] which is nonsense, or "...Гонка (Евгений Маслёнков).
+    # — Страна: Германия, Аргентина, Уругвай." splits to ["",
+    # "Страна: Германия, Аргентина, Уругвай."]. Letting these through
+    # makes Phase A hit Wikipedia with garbage strings and return
+    # random country/city/broadcaster articles as "club crests".
+    if halves and not all(_half_looks_like_team(h) for h in halves):
+        print(
+            f"[sport-art] reject-halves halves={halves!r} for title={title[:60]!r}",
+            flush=True,
+        )
+        halves = []
 
     # Phase A — Wiki club canonicals for halves. For a real matchup
     # ("Спартак — Локомотив", "Наполи — Лацио") the canonical map
@@ -1053,7 +1129,13 @@ async def _resolve_sport_art(posters: PosterResolver, entry: Any) -> str:  # noq
                 club_queries.append(variant)
     for q in club_queries:
         try:
-            hit = await posters.resolve(q, "ru", allow_commons=True)
+            # skip_fuzzy: Wiki's fuzzy search on a bare Portuguese /
+            # Brazilian / Spanish club name ("Брага", "Фамаликан",
+            # "Витория") pulls up person or city articles. We'd
+            # rather cascade to TheSportsDB than accept those.
+            hit = await posters.resolve(
+                q, "ru", allow_commons=True, skip_fuzzy=True
+            )
         except Exception as exc:  # noqa: BLE001
             print(f"[sport-art] error q={q!r}: {exc}", flush=True)
             continue
