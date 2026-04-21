@@ -126,6 +126,17 @@ async def generate_digest(
         )
     )
 
+    # gpt-5-* are reasoning models. On a non-trivial task like JSON
+    # digest generation they default to medium reasoning and can
+    # spend 3-5 minutes "thinking" before emitting a single token —
+    # unusable for our end-user-triggered flow. `reasoning_effort=
+    # "minimal"` disables the thinking pass; the digest is a rule-
+    # driven selection task where reasoning wouldn't help anyway.
+    # The kwarg is harmless for non-reasoning models that ignore it.
+    extra: dict[str, Any] = {}
+    if config.digest_model.startswith(("gpt-5", "o1", "o3")):
+        extra["reasoning_effort"] = "minimal"
+
     try:
         response = await client.chat.completions.create(
             model=config.digest_model,
@@ -134,6 +145,7 @@ async def generate_digest(
                 {"role": "user", "content": user_prompt},
             ],
             response_format={"type": "json_object"},
+            **extra,
         )
     except OpenAIError as exc:
         raise RuntimeError(f"OpenAI call failed: {exc}") from exc
