@@ -43,12 +43,17 @@ _UNKNOWN_PRICE: tuple[float, float] = (1.0, 4.0)
 
 
 def _price_for(model: str) -> tuple[float, float]:
-    """Return (input, output) USD per 1M tokens for the given model."""
+    """Return (input, output) USD per 1M tokens for the given model.
+
+    Iterate longest prefix first so ``gpt-5-mini`` matches the
+    ``gpt-5-mini`` entry, not the shorter ``gpt-5`` one. Without this
+    sort, Python's insertion-order dict iteration returned the
+    wrong (more expensive) price for every mini / nano variant.
+    """
     key = model.lower().strip()
-    # Versioned model names like "gpt-5-mini-2025-04-18" — match prefix.
-    for base, price in _PRICES_PER_MILLION.items():
+    for base in sorted(_PRICES_PER_MILLION, key=len, reverse=True):
         if key == base or key.startswith(base + "-"):
-            return price
+            return _PRICES_PER_MILLION[base]
     return _UNKNOWN_PRICE
 
 
