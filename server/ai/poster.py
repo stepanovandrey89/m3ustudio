@@ -188,9 +188,7 @@ class PosterResolver:
             if time.time() - ts < ttl:
                 return hit
 
-        hit = await self._fetch(
-            clean, lang, allow_commons=allow_commons, skip_fuzzy=skip_fuzzy
-        )
+        hit = await self._fetch(clean, lang, allow_commons=allow_commons, skip_fuzzy=skip_fuzzy)
         async with self._lock:
             self._mem[key] = (time.time(), hit)
             self._save()
@@ -1176,9 +1174,7 @@ async def _ddg_fetch_vqd(client: httpx.AsyncClient, query: str) -> str | None:
     return None
 
 
-async def _ddg_search_image(
-    client: httpx.AsyncClient, query: str, vqd: str
-) -> PosterHit | None:
+async def _ddg_search_image(client: httpx.AsyncClient, query: str, vqd: str) -> PosterHit | None:
     """Call DuckDuckGo's image-search JSON endpoint and return the first
     usable hit. ``locale=ru-ru`` biases results toward Russian-language
     sources which matches our EPG titles."""

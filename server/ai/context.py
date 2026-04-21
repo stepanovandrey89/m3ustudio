@@ -421,9 +421,7 @@ def narrow_by_time_window(
     """
     narrowed: list[ChannelSchedule] = []
     for sch in schedules:
-        matching = tuple(
-            p for p in sch.programmes if window_start <= p.start < window_stop
-        )
+        matching = tuple(p for p in sch.programmes if window_start <= p.start < window_stop)
         if matching:
             narrowed.append(
                 ChannelSchedule(

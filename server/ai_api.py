@@ -130,9 +130,7 @@ def build_router(state: Any) -> APIRouter:  # noqa: ANN401 — state is the main
                 # worker. The scheduler is a no-op when a worker
                 # is already running for this (theme, lang).
                 if any(not i.poster_url for i in remaining):
-                    _schedule_backfill(
-                        digest_cache, posters, theme_typed, lang, restart=False
-                    )
+                    _schedule_backfill(digest_cache, posters, theme_typed, lang, restart=False)
                 # Response only includes items that already have a
                 # resolved poster — matches the "no empty cards"
                 # requirement. Pending ones stay in the disk JSON
@@ -295,14 +293,10 @@ def build_router(state: Any) -> APIRouter:  # noqa: ANN401 — state is the main
         # 10:00 about "вечером" needs EPG through 24:00, well past the
         # default 8h horizon — and later narrow programmes to exactly
         # that window so the model can only recommend from it.
-        tod_label = (
-            None if body.deep_search else detect_time_of_day(last_user_msg)
-        )
+        tod_label = None if body.deep_search else detect_time_of_day(last_user_msg)
         tod_window: tuple[datetime, datetime] | None = None
         if tod_label is not None:
-            window_start, window_stop = resolve_tod_window(
-                tod_label, datetime.now(UTC)
-            )
+            window_start, window_stop = resolve_tod_window(tod_label, datetime.now(UTC))
             hours_needed = (window_stop - datetime.now(UTC)).total_seconds() / 3600
             future_hours = max(8, min(30, int(hours_needed) + 2))
             tod_window = (window_start, window_stop)
@@ -860,6 +854,8 @@ def _half_looks_like_team(h: str) -> bool:
     if ":" in h:
         return False
     return not any(marker in low for marker in _NON_TEAM_MARKERS)
+
+
 _EPG_PARENS_RE = re.compile(r"\s*\([^)]{1,60}\)\s*$")
 # Parens that look like city / location hints — single capitalised word
 # or hyphenated compound ("Санкт-Петербург", "Новосибирск", "Нижний
@@ -904,7 +900,7 @@ def _strip_epg_tail(s: str) -> str:
     # the city-inline step ("Локомотив" + (Новосибирск) merges into
     # '"Локомотив" Новосибирск', which should read "Локомотив
     # Новосибирск" for the canonical lookup).
-    s = re.sub(r'[\"«»‘’“”\']', "", s).strip()
+    s = re.sub(r"[\"«»‘’“”\']", "", s).strip()
     # Collapse any double spaces left over.
     return re.sub(r"\s{2,}", " ", s)
 
@@ -1172,9 +1168,7 @@ async def _resolve_sport_art_legacy(posters: PosterResolver, entry: Any) -> str:
             # Brazilian / Spanish club name ("Брага", "Фамаликан",
             # "Витория") pulls up person or city articles. We'd
             # rather cascade to TheSportsDB than accept those.
-            hit = await posters.resolve(
-                q, "ru", allow_commons=True, skip_fuzzy=True
-            )
+            hit = await posters.resolve(q, "ru", allow_commons=True, skip_fuzzy=True)
         except Exception as exc:  # noqa: BLE001
             print(f"[sport-art] error q={q!r}: {exc}", flush=True)
             continue
@@ -1202,9 +1196,7 @@ async def _resolve_sport_art_legacy(posters: PosterResolver, entry: Any) -> str:
                 break
     if matched_sportsdb:
         try:
-            hit = await posters.resolve_sport(
-                matched_sportsdb, match_halves=halves or None
-            )
+            hit = await posters.resolve_sport(matched_sportsdb, match_halves=halves or None)
         except Exception as exc:  # noqa: BLE001
             print(f"[sport-art] sportsdb-fail q={matched_sportsdb!r}: {exc}", flush=True)
             hit = None
@@ -1227,9 +1219,7 @@ async def _resolve_sport_art_legacy(posters: PosterResolver, entry: Any) -> str:
     # each half as a team name.
     if halves:
         try:
-            hit = await posters.resolve_sport(
-                " vs ".join(halves), match_halves=halves
-            )
+            hit = await posters.resolve_sport(" vs ".join(halves), match_halves=halves)
         except Exception as exc:  # noqa: BLE001
             print(f"[sport-art] team-sportsdb-fail: {exc}", flush=True)
             hit = None
@@ -1636,8 +1626,7 @@ async def _generate_digest_bg(
         if schedules_no_placeholders:
             schedules = schedules_no_placeholders
         print(
-            f"[digest-bg] theme={theme} schedules={len(schedules)} "
-            f"channels={len(main_channels)}",
+            f"[digest-bg] theme={theme} schedules={len(schedules)} channels={len(main_channels)}",
             flush=True,
         )
 
@@ -1672,9 +1661,7 @@ async def _generate_digest_bg(
         if result.items:
             digest_cache.put(result)
             if any(not i.poster_url for i in result.items):
-                _schedule_backfill(
-                    digest_cache, posters, theme, lang, restart=True
-                )
+                _schedule_backfill(digest_cache, posters, theme, lang, restart=True)
         else:
             print(f"[digest-bg] theme={theme} empty result — NOT persisting", flush=True)
     except asyncio.CancelledError:
@@ -1725,9 +1712,7 @@ def _schedule_backfill(
         if not restart:
             return
         prev.cancel()
-    task = asyncio.create_task(
-        _backfill_digest_posters(digest_cache, posters, cli, theme, lang)
-    )
+    task = asyncio.create_task(_backfill_digest_posters(digest_cache, posters, cli, theme, lang))
     _backfill_tasks[key] = task
 
 
@@ -1765,9 +1750,7 @@ async def _backfill_digest_posters(
                 flush=True,
             )
             for entry in missing:
-                new_url = await _retry_poster_for_entry(
-                    entry, theme, posters, client, lang
-                )
+                new_url = await _retry_poster_for_entry(entry, theme, posters, client, lang)
                 if not new_url:
                     continue
                 # Read the latest on-disk snapshot before patching — a
@@ -2118,9 +2101,7 @@ def _exclude_non_sport(schedules: list) -> list:
     clean: list[ChannelSchedule] = []
     for sch in schedules:
         matching = tuple(
-            p
-            for p in sch.programmes
-            if not _is_fictional_entry(p.title, p.description)
+            p for p in sch.programmes if not _is_fictional_entry(p.title, p.description)
         )
         if matching:
             clean.append(
@@ -2141,9 +2122,7 @@ def _drop_fictional_digest_items(items: tuple) -> tuple:
     hallucinate that a live sport show is a "film" in the blurb, or
     pick an item the pre-filter missed. Returns the filtered tuple.
     """
-    return tuple(
-        i for i in items if not _is_fictional_entry(i.title, i.blurb)
-    )
+    return tuple(i for i in items if not _is_fictional_entry(i.title, i.blurb))
 
 
 def _narrow_by_keywords(schedules: list, keywords: list[str]) -> list:

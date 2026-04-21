@@ -433,9 +433,7 @@ class RecordingManager:
         try:
             if wall_deadline is not None:
                 try:
-                    _, err = await asyncio.wait_for(
-                        process.communicate(), timeout=wall_deadline
-                    )
+                    _, err = await asyncio.wait_for(process.communicate(), timeout=wall_deadline)
                 except TimeoutError:
                     # Programme window is over — terminate ffmpeg and drain
                     # its output so the MKV trailer is flushed.
@@ -443,9 +441,7 @@ class RecordingManager:
                     with contextlib.suppress(ProcessLookupError):
                         process.terminate()
                     try:
-                        _, err = await asyncio.wait_for(
-                            process.communicate(), timeout=5.0
-                        )
+                        _, err = await asyncio.wait_for(process.communicate(), timeout=5.0)
                     except TimeoutError:
                         with contextlib.suppress(ProcessLookupError):
                             process.kill()

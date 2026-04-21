@@ -35,9 +35,7 @@ class AIConfig:
         # slots as concrete films). gpt-5-mini is still fast enough to
         # stay well under Cloudflare's 100s edge timeout. Overridable
         # via env if we ever need to fall back.
-        digest_model = (
-            os.environ.get("OPENAI_DIGEST_MODEL", "gpt-5-mini").strip() or "gpt-5-mini"
-        )
+        digest_model = os.environ.get("OPENAI_DIGEST_MODEL", "gpt-5-mini").strip() or "gpt-5-mini"
         return cls(api_key=key, model=model, digest_model=digest_model, enabled=bool(key))
 
 
