@@ -413,12 +413,51 @@ class RecordingManager:
             stderr=subprocess.PIPE,
         )
 
+        # Wall-clock deadline: ffmpeg's ``-t`` is stream-time based, so a
+        # stalled upstream can keep the subprocess alive past the scheduled
+        # ``stop_dt``. Without this watchdog, the UI keeps pulsing "Идёт
+        # запись…" for a programme that's already over. We give ffmpeg a
+        # small grace window past stop_dt to finalise the MKV trailer
+        # naturally, then SIGTERM it so the job closes promptly.
+        WATCHDOG_GRACE_SECONDS = 10.0
+        stop_dt_wall = _parse_iso(entry.stop)
+        wall_deadline: float | None = None
+        if stop_dt_wall is not None:
+            wall_deadline = max(
+                1.0,
+                (stop_dt_wall - datetime.now(UTC)).total_seconds() + WATCHDOG_GRACE_SECONDS,
+            )
+
+        err: bytes = b""
+        hit_wall_deadline = False
         try:
-            _, err = await process.communicate()
+            if wall_deadline is not None:
+                try:
+                    _, err = await asyncio.wait_for(
+                        process.communicate(), timeout=wall_deadline
+                    )
+                except TimeoutError:
+                    # Programme window is over — terminate ffmpeg and drain
+                    # its output so the MKV trailer is flushed.
+                    hit_wall_deadline = True
+                    with contextlib.suppress(ProcessLookupError):
+                        process.terminate()
+                    try:
+                        _, err = await asyncio.wait_for(
+                            process.communicate(), timeout=5.0
+                        )
+                    except TimeoutError:
+                        with contextlib.suppress(ProcessLookupError):
+                            process.kill()
+                        with contextlib.suppress(Exception):
+                            _, err = await process.communicate()
+            else:
+                _, err = await process.communicate()
         except asyncio.CancelledError:
+            # User-initiated cancel/pause — different path from the
+            # wall-deadline; bubble up so the caller's cleanup runs.
             with contextlib.suppress(ProcessLookupError):
                 process.terminate()
-            # Wait briefly for MKV to finalise cleanly on SIGTERM.
             with contextlib.suppress(asyncio.TimeoutError, Exception):
                 await asyncio.wait_for(process.wait(), timeout=5)
             raise
@@ -430,7 +469,21 @@ class RecordingManager:
         # doesn't hit the exact second.
         reached_end = stop_dt is not None and (stop_dt - now).total_seconds() <= 5
 
-        if process.returncode == 0 and reached_end:
+        if hit_wall_deadline:
+            # Watchdog fired: we're past stop_dt regardless of what ffmpeg
+            # returned. Salvage whatever was captured and close the job so
+            # the UI stops pulsing "recording in progress".
+            if self._parts_of(entry) and self._total_size(entry) > 0:
+                await self._mark_done(rec_id)
+            else:
+                self._save(
+                    replace(
+                        entry,
+                        status="failed",
+                        error="programme window elapsed before any content captured",
+                    )
+                )
+        elif process.returncode == 0 and reached_end:
             await self._mark_done(rec_id)
         elif process.returncode == 0:
             # Segment cap expired but window not over (e.g. 6h safety cap).

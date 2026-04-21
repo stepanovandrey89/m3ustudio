@@ -16,8 +16,31 @@ import {
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../lib/api'
 import { useI18n } from '../lib/i18n'
+import { useNow } from '../hooks/useNow'
 import { cn } from '../lib/cn'
 import type { DigestTheme, Recording } from '../types'
+
+// Visual status used by the card/pill — adds an explicit "finalising" state
+// on top of the server-reported status so the chip stops pulsing "Recording…"
+// the moment the scheduled stop time passes. The poll loop picks up the real
+// server status (done/failed) within a few seconds after that.
+type VisualStatus = Recording['status'] | 'finalising'
+
+// ms past `rec.stop` after which we stop trusting the "running"/"queued"
+// badge. Server's wall-clock watchdog terminates ffmpeg within ~10s of
+// stop_dt; this grace window needs to be a touch longer than that so we
+// don't flip the pill to "finalising" before the server has had time to
+// mark the recording done on its own.
+const STATUS_CLOCK_GRACE_MS = 15_000
+
+function effectiveStatus(rec: Recording, now: Date): VisualStatus {
+  if (rec.status !== 'running' && rec.status !== 'queued') return rec.status
+  if (!rec.stop) return rec.status
+  const stopMs = new Date(rec.stop).getTime()
+  if (!Number.isFinite(stopMs)) return rec.status
+  if (now.getTime() >= stopMs + STATUS_CLOCK_GRACE_MS) return 'finalising'
+  return rec.status
+}
 
 type ThemeFilter = 'all' | DigestTheme
 
@@ -285,6 +308,12 @@ function RecordingCard({
   const theme = toTheme(rec.theme)
   const Icon = THEME_ICONS[theme]
   const accent = THEME_ACCENTS[theme]
+  // Tick the card once per 10s so `effectiveStatus` can promote a stale
+  // "running" badge to "finalising" without waiting for the 5s archive
+  // poll. Once the server catches up (wall-clock watchdog fires and flips
+  // status to done), the poll overwrites it.
+  const now = useNow(10_000)
+  const visual = effectiveStatus(rec, now)
   const isPlayable = rec.status === 'done' || rec.status === 'paused'
   const poster = rec.poster_url || ''
 
@@ -328,7 +357,7 @@ function RecordingCard({
             <Icon className="h-3 w-3" />
             {t(`digest_theme_${theme}`)}
           </div>
-          <StatusPill status={rec.status} />
+          <StatusPill status={visual} />
         </div>
 
         <div>
@@ -365,7 +394,7 @@ function RecordingCard({
                 </button>
               </>
             )}
-            {rec.status === 'running' && (
+            {visual === 'running' && (
               <>
                 {/* Play what's on disk right now — the MKV ffmpeg is writing
                     into. Browser reads whatever bytes are present at fetch
@@ -396,6 +425,12 @@ function RecordingCard({
                   {t('archive_cancel')}
                 </button>
               </>
+            )}
+            {visual === 'finalising' && (
+              <div className="flex items-center gap-1.5 rounded-full border border-white/15 bg-black/40 px-3 py-1.5 text-[12px] text-white/70 backdrop-blur-sm">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                {t('archive_finalising')}
+              </div>
             )}
             {rec.status === 'paused' && (
               <>
@@ -454,7 +489,7 @@ function RecordingCard({
   )
 }
 
-function StatusPill({ status }: { status: Recording['status'] }) {
+function StatusPill({ status }: { status: VisualStatus }) {
   const { t } = useI18n()
   if (status === 'running') {
     return (
@@ -465,6 +500,14 @@ function StatusPill({ status }: { status: Recording['status'] }) {
           className="h-2 w-2 rounded-full bg-current"
         />
         {t('archive_running')}
+      </div>
+    )
+  }
+  if (status === 'finalising') {
+    return (
+      <div className="flex items-center gap-1.5 rounded-full border border-white/20 bg-black/40 px-2 py-1 text-[11px] text-white/75 backdrop-blur-sm">
+        <Loader2 className="h-2.5 w-2.5 animate-spin" />
+        {t('archive_finalising')}
       </div>
     )
   }
