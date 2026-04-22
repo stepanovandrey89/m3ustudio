@@ -552,13 +552,22 @@ function PlayerOverlay({
   lang: string
 }) {
   const { t } = useI18n()
-  // A single recording may consist of multiple MKV segments (pause/resume or
-  // restart hops). We play them sequentially: on `ended`, advance to the next
-  // segment; the <video> element is remounted via `key` so the new src loads
-  // cleanly without fighting the previous media stream.
+  // A single recording may consist of multiple MP4 segments — either
+  // pause/resume hops, server restarts, or auto-retries after an ffmpeg
+  // crash. We play them sequentially: on `ended`, advance to the next
+  // segment; the <video> element is remounted via `key` so the new src
+  // loads cleanly without fighting the previous media stream.
   const parts = rec.parts && rec.parts.length > 0 ? rec.parts : [rec.file]
   const [partIdx, setPartIdx] = useState(0)
   const videoRef = useRef<HTMLVideoElement | null>(null)
+  // Single-part done recordings go through /file so the MP4 remux wins
+  // over the legacy MKV part[0] for mobile Safari / Chrome. Multi-part
+  // (or a running recording with retries) keeps /part/{index} so the
+  // user can scrub through each segment individually.
+  const useFileEndpoint = parts.length <= 1
+  const src = useFileEndpoint
+    ? api.recordingFileUrl(rec.id)
+    : api.recordingPartUrl(rec.id, partIdx)
 
   useEffect(() => {
     setPartIdx(0)
@@ -566,6 +575,16 @@ function PlayerOverlay({
 
   const handleEnded = () => {
     if (partIdx < parts.length - 1) {
+      setPartIdx((i) => i + 1)
+    }
+  }
+
+  // If a segment 404s (e.g. auto-retry bookkeeping race: parts got the
+  // new name before ffmpeg opened the file, then cancel hit), skip it so
+  // the user still reaches the next playable segment instead of staring
+  // at a broken video element.
+  const handleError = () => {
+    if (!useFileEndpoint && partIdx < parts.length - 1) {
       setPartIdx((i) => i + 1)
     }
   }
@@ -608,12 +627,14 @@ function PlayerOverlay({
           </button>
         </div>
         <video
-          key={`${rec.id}-${partIdx}`}
+          key={`${rec.id}-${partIdx}-${useFileEndpoint ? 'f' : 'p'}`}
           ref={videoRef}
-          src={api.recordingPartUrl(rec.id, partIdx)}
+          src={src}
           controls
           autoPlay
+          playsInline
           onEnded={handleEnded}
+          onError={handleError}
           className="aspect-video w-full rounded-2xl bg-black"
         />
         {parts.length > 1 && (

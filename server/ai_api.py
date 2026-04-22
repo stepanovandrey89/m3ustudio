@@ -80,6 +80,37 @@ class PlanBody(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+_VIDEO_MIME_BY_EXT: dict[str, str] = {
+    ".mp4": "video/mp4",
+    ".m4v": "video/mp4",
+    ".mkv": "video/x-matroska",
+    ".webm": "video/webm",
+    ".mov": "video/quicktime",
+    ".ts": "video/mp2t",
+}
+
+
+def _video_media_type(filename: str) -> tuple[str, str]:
+    """Resolve (mime, extension) for a recording filename.
+
+    Archive files are MP4 by default, legacy recordings may still be MKV,
+    and remux fallbacks can keep the original extension. Using a hard-coded
+    ``video/x-matroska`` on every request is the bug that stopped mobile
+    Safari / Chrome from playing fresh MP4 captures — they refuse the
+    mismatched MIME and render an empty progress bar.
+    """
+    lower = filename.lower()
+    for ext, mime in _VIDEO_MIME_BY_EXT.items():
+        if lower.endswith(ext):
+            return mime, ext.lstrip(".")
+    return "application/octet-stream", "bin"
+
+
+# ---------------------------------------------------------------------------
 # Router factory
 # ---------------------------------------------------------------------------
 
@@ -475,17 +506,24 @@ def build_router(state: Any) -> APIRouter:  # noqa: ANN401 — state is the main
         path = recordings.root / entry.file
         if not path.exists():
             raise HTTPException(404, "File not on disk")
+        media_type, ext = _video_media_type(entry.file)
         if download:
             return FileResponse(
                 path,
-                media_type="video/x-matroska",
-                filename=f"{entry.title or entry.id}.mkv",
+                media_type=media_type,
+                filename=f"{entry.title or entry.id}.{ext}",
             )
-        return FileResponse(path, media_type="video/x-matroska")
+        return FileResponse(path, media_type=media_type)
 
     @router.get("/recordings/{rec_id}/part/{index}")
     def recording_part(rec_id: str, index: int) -> FileResponse:
-        """Serve an individual recording segment for sequential playback."""
+        """Serve an individual recording segment for sequential playback.
+
+        MIME type is picked from the part's file extension so the
+        browser's ``<video>`` element can decode it — mobile Safari and
+        Chrome on Android refuse to play an MP4 that's served as
+        ``video/x-matroska`` (the old hard-coded value).
+        """
         entry = recordings.get(rec_id)
         if entry is None:
             raise HTTPException(404, "Recording not found")
@@ -495,7 +533,8 @@ def build_router(state: Any) -> APIRouter:  # noqa: ANN401 — state is the main
         path = recordings.root / parts[index]
         if not path.exists():
             raise HTTPException(404, "File not on disk")
-        return FileResponse(path, media_type="video/x-matroska")
+        media_type, _ = _video_media_type(parts[index])
+        return FileResponse(path, media_type=media_type)
 
     # ------------- Plans (watch-later) -----------------------------------
 
