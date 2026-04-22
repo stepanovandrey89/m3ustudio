@@ -26,13 +26,25 @@ import subprocess
 import time
 import uuid
 from dataclasses import asdict, dataclass, field, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
 RecordingStatus = Literal["queued", "running", "paused", "done", "failed"]
 VALID_THEMES: tuple[str, ...] = ("sport", "cinema", "assistant")
-MAX_DURATION_SECONDS = 6 * 3600  # safety cap: never record more than 6h
+MAX_DURATION_SECONDS = 6 * 3600  # safety cap per ffmpeg segment; multi-segment ok
+
+# Resilience knobs for the auto-restart loop. The primary contract with
+# users: while the programme window is still open, any ffmpeg crash,
+# network blip, or upstream hiccup MUST be transparently recovered by
+# starting a fresh segment — never "status=failed, recording gone".
+#
+# Only when the upstream is genuinely unreachable (repeated
+# zero-byte segments) do we surrender, so we don't burn CPU spawning
+# ffmpeg forever against a dead stream.
+_AUTO_RETRY_BACKOFF_SECONDS = 3.0
+_AUTO_RETRY_BACKOFF_MAX_SECONDS = 30.0
+_AUTO_RETRY_EMPTY_SEGMENTS_GIVE_UP = 5
 
 
 def _slug(value: str, limit: int = 40) -> str:
@@ -368,28 +380,21 @@ class RecordingManager:
     # Execution
     # ------------------------------------------------------------------
 
-    async def _run(
+    async def _run_ffmpeg_segment(
         self,
-        rec_id: str,
         upstream_url: str,
-        effective_start: datetime,
         duration: int,
-        output_segment: str,
-    ) -> None:
-        # Wait until start moment.
-        delta = (effective_start - datetime.now(UTC)).total_seconds()
-        if delta > 0:
-            try:
-                await asyncio.sleep(delta)
-            except asyncio.CancelledError:
-                return
+        segment_name: str,
+        stop_iso: str,
+    ) -> tuple[bytes, int, bool]:
+        """Launch one ffmpeg capture pass writing to ``segment_name``.
 
-        entry = self._load(rec_id)
-        if entry is None:
-            return
-        self._save(replace(entry, status="running"))
-
-        out_path = self._file_path(output_segment)
+        Returns (stderr_bytes, returncode, hit_wall_deadline). Propagates
+        :class:`asyncio.CancelledError` on pause/cancel after terminating
+        the subprocess so the caller's cleanup (pause()/cancel()) runs
+        without racing a live ffmpeg child.
+        """
+        out_path = self._file_path(segment_name)
         # Fragmented MP4: `frag_keyframe+empty_moov+default_base_moof`
         # writes a streamable file that plays even if ffmpeg exits
         # uncleanly (SIGTERM on watchdog or pause). `+faststart` moves
@@ -442,10 +447,10 @@ class RecordingManager:
         # stalled upstream can keep the subprocess alive past the scheduled
         # ``stop_dt``. Without this watchdog, the UI keeps pulsing "Идёт
         # запись…" for a programme that's already over. We give ffmpeg a
-        # small grace window past stop_dt to finalise the MKV trailer
+        # small grace window past stop_dt to finalise the MP4 trailer
         # naturally, then SIGTERM it so the job closes promptly.
         WATCHDOG_GRACE_SECONDS = 10.0
-        stop_dt_wall = _parse_iso(entry.stop)
+        stop_dt_wall = _parse_iso(stop_iso)
         wall_deadline: float | None = None
         if stop_dt_wall is not None:
             wall_deadline = max(
@@ -460,8 +465,6 @@ class RecordingManager:
                 try:
                     _, err = await asyncio.wait_for(process.communicate(), timeout=wall_deadline)
                 except TimeoutError:
-                    # Programme window is over — terminate ffmpeg and drain
-                    # its output so the MKV trailer is flushed.
                     hit_wall_deadline = True
                     with contextlib.suppress(ProcessLookupError):
                         process.terminate()
@@ -475,49 +478,206 @@ class RecordingManager:
             else:
                 _, err = await process.communicate()
         except asyncio.CancelledError:
-            # User-initiated cancel/pause — different path from the
-            # wall-deadline; bubble up so the caller's cleanup runs.
             with contextlib.suppress(ProcessLookupError):
                 process.terminate()
             with contextlib.suppress(asyncio.TimeoutError, Exception):
                 await asyncio.wait_for(process.wait(), timeout=5)
             raise
 
-        entry = self._load(rec_id) or entry
-        stop_dt = _parse_iso(entry.stop)
-        now = datetime.now(UTC)
-        # Anything within 5s of stop counts as "reached end"; ffmpeg's -t
-        # doesn't hit the exact second.
-        reached_end = stop_dt is not None and (stop_dt - now).total_seconds() <= 5
+        returncode = process.returncode if process.returncode is not None else -1
+        return err, returncode, hit_wall_deadline
 
-        if hit_wall_deadline:
-            # Watchdog fired: we're past stop_dt regardless of what ffmpeg
-            # returned. Salvage whatever was captured and close the job so
-            # the UI stops pulsing "recording in progress".
-            if self._parts_of(entry) and self._total_size(entry) > 0:
-                await self._mark_done(rec_id)
-            else:
+    async def _run(
+        self,
+        rec_id: str,
+        upstream_url: str,
+        effective_start: datetime,
+        duration: int,
+        output_segment: str,
+    ) -> None:
+        """Capture a programme across as many ffmpeg segments as needed.
+
+        The loop is the core resilience contract: while the programme
+        window is still open, any ffmpeg exit other than a clean
+        reached-end is either a stream hiccup (network, upstream 502,
+        process crash) or a segment safety cap. In both cases we do NOT
+        fail the recording — we append a fresh segment and keep going.
+
+        Terminal paths (loop exits):
+          * ``reached_end`` with clean rc → finalise via ``_mark_done``.
+          * ``hit_wall_deadline`` → salvage captured bytes, close out.
+          * Window elapsed during backoff → same salvage path.
+          * Upstream repeatedly produces zero-byte segments → give up
+            to avoid spinning ffmpeg forever on a dead stream.
+          * ``CancelledError`` from pause/cancel → bubble out untouched
+            so the caller's status transition (paused/done/failed) wins.
+        """
+        delta = (effective_start - datetime.now(UTC)).total_seconds()
+        if delta > 0:
+            try:
+                await asyncio.sleep(delta)
+            except asyncio.CancelledError:
+                return
+
+        entry = self._load(rec_id)
+        if entry is None:
+            return
+        self._save(replace(entry, status="running", error=""))
+
+        segment_name = output_segment
+        remaining_duration = duration
+        backoff = _AUTO_RETRY_BACKOFF_SECONDS
+        consecutive_empty_segments = 0
+        last_error = ""
+
+        try:
+            while True:
+                err, returncode, hit_wall_deadline = await self._run_ffmpeg_segment(
+                    upstream_url, remaining_duration, segment_name, entry.stop
+                )
+
+                entry = self._load(rec_id) or entry
+                stop_dt = _parse_iso(entry.stop)
+                now = datetime.now(UTC)
+                # ``reached_end`` = ffmpeg's -t timer hit ~exactly the
+                # programme stop (plus/minus the few seconds of slop that
+                # -t doesn't guarantee). No retry needed — clean finish.
+                reached_end = stop_dt is not None and (stop_dt - now).total_seconds() <= 5
+                # ``window_open`` = enough runway left that a fresh segment
+                # would actually capture content. <30s remaining → not
+                # worth spinning up another ffmpeg.
+                window_open = stop_dt is not None and (stop_dt - now).total_seconds() > 30
+                seg_path = self._file_path(segment_name)
+                seg_size = seg_path.stat().st_size if seg_path.exists() else 0
+
+                if hit_wall_deadline:
+                    if self._parts_of(entry) and self._total_size(entry) > 0:
+                        await self._mark_done(rec_id)
+                    else:
+                        self._save(
+                            replace(
+                                entry,
+                                status="failed",
+                                error="programme window elapsed before any content captured",
+                            )
+                        )
+                    return
+
+                if returncode == 0 and reached_end:
+                    await self._mark_done(rec_id)
+                    return
+
+                if returncode == 0:
+                    # Segment safety cap hit but programme still has time
+                    # (window longer than MAX_DURATION_SECONDS). Seamlessly
+                    # start the next segment — this was previously a
+                    # silent pause that stranded the recording.
+                    consecutive_empty_segments = 0
+                    backoff = _AUTO_RETRY_BACKOFF_SECONDS
+                    last_error = ""
+                else:
+                    # ffmpeg died with an error (network blip, upstream
+                    # 5xx, SIGPIPE, decoder failure). Retry while the
+                    # programme window is still open.
+                    error_msg = err.decode("utf-8", "ignore").strip()[:500]
+                    last_error = error_msg
+                    if not window_open:
+                        # Too close to stop to usefully retry — finalise
+                        # whatever we already have.
+                        if self._parts_of(entry) and self._total_size(entry) > 0:
+                            await self._mark_done(rec_id)
+                        else:
+                            self._save(
+                                replace(
+                                    entry,
+                                    status="failed",
+                                    error=error_msg or "ffmpeg failed near window end",
+                                )
+                            )
+                        return
+                    if seg_size > 0:
+                        # Crash after some content was captured — reset
+                        # backoff so we don't throttle a healthy stream
+                        # on every stream-side hiccup.
+                        consecutive_empty_segments = 0
+                        backoff = _AUTO_RETRY_BACKOFF_SECONDS
+                    else:
+                        consecutive_empty_segments += 1
+                        if consecutive_empty_segments >= _AUTO_RETRY_EMPTY_SEGMENTS_GIVE_UP:
+                            # Upstream genuinely unreachable — stop
+                            # spawning ffmpeg so we don't drain CPU.
+                            if self._parts_of(entry) and self._total_size(entry) > 0:
+                                await self._mark_done(rec_id)
+                            else:
+                                self._save(
+                                    replace(
+                                        entry,
+                                        status="failed",
+                                        error=(
+                                            f"upstream unreachable after "
+                                            f"{_AUTO_RETRY_EMPTY_SEGMENTS_GIVE_UP} retries: "
+                                            f"{error_msg[:200]}"
+                                        ),
+                                    )
+                                )
+                            return
+                        backoff = min(backoff * 1.5, _AUTO_RETRY_BACKOFF_MAX_SECONDS)
+                    # Stay visible as "running" across the retry — the
+                    # UI shouldn't flash a "failed" chip for a recording
+                    # that's about to resume on its own.
+                    self._save(
+                        replace(
+                            entry,
+                            status="running",
+                            bytes=self._total_size(entry),
+                            error=(
+                                f"auto-retry (attempt {consecutive_empty_segments + 1}): "
+                                f"{error_msg[:160]}"
+                            ),
+                        )
+                    )
+
+                try:
+                    await asyncio.sleep(backoff)
+                except asyncio.CancelledError:
+                    raise
+
+                entry = self._load(rec_id) or entry
+                stop_dt = _parse_iso(entry.stop)
+                now = datetime.now(UTC)
+                if stop_dt is None or stop_dt <= now + timedelta(seconds=5):
+                    if self._parts_of(entry) and self._total_size(entry) > 0:
+                        await self._mark_done(rec_id)
+                    else:
+                        self._save(
+                            replace(
+                                entry,
+                                status="failed",
+                                error=(
+                                    f"window elapsed during retry: {last_error[:200]}"
+                                    if last_error
+                                    else "window elapsed"
+                                ),
+                            )
+                        )
+                    return
+
+                remaining_duration = max(30, int((stop_dt - now).total_seconds()))
+                remaining_duration = min(remaining_duration, MAX_DURATION_SECONDS)
+
+                parts = self._parts_of(entry)
+                segment_name = f"{rec_id}_p{len(parts) + 1}.mp4"
                 self._save(
                     replace(
                         entry,
-                        status="failed",
-                        error="programme window elapsed before any content captured",
+                        parts=parts + [segment_name],
+                        status="running",
+                        error="",
                     )
                 )
-        elif process.returncode == 0 and reached_end:
-            await self._mark_done(rec_id)
-        elif process.returncode == 0:
-            # Segment cap expired but window not over (e.g. 6h safety cap).
-            # Treat as a pause-ish state so the user can resume.
-            size = self._total_size(entry)
-            self._save(replace(entry, status="paused", bytes=size, error=""))
-        else:
-            error_msg = err.decode("utf-8", "ignore").strip()[:500]
-            size = self._total_size(entry)
-            self._save(replace(entry, status="failed", bytes=size, error=error_msg))
-
-        async with self._lock:
-            self._tasks.pop(rec_id, None)
+        finally:
+            async with self._lock:
+                self._tasks.pop(rec_id, None)
 
     async def _remux_to_mp4(self, rec_id: str, mkv_name: str) -> str:
         """Produce an MP4 copy of the finalised MKV for mobile playback.
