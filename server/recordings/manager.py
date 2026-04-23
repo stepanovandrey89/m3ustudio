@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import re
 import subprocess
 import time
@@ -29,6 +30,8 @@ from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
+
+logger = logging.getLogger(__name__)
 
 RecordingStatus = Literal["queued", "running", "paused", "done", "failed"]
 VALID_THEMES: tuple[str, ...] = ("sport", "cinema", "assistant")
@@ -45,6 +48,10 @@ MAX_DURATION_SECONDS = 6 * 3600  # safety cap per ffmpeg segment; multi-segment 
 _AUTO_RETRY_BACKOFF_SECONDS = 3.0
 _AUTO_RETRY_BACKOFF_MAX_SECONDS = 30.0
 _AUTO_RETRY_EMPTY_SEGMENTS_GIVE_UP = 5
+# Kill and re-spawn ffmpeg if the output file hasn't grown for this long —
+# covers the "upstream accepts TCP but never sends data" case where ffmpeg
+# would otherwise sit on `-i` forever without returning an error.
+_STALL_WATCHDOG_SECONDS = 25.0
 
 
 def _slug(value: str, limit: int = 40) -> str:
@@ -401,6 +408,17 @@ class RecordingManager:
         # the moov atom to the head for progressive playback on
         # mobile Safari. Audio is transcoded to AAC because MP4
         # doesn't permit AC-3 — video stays copy (zero re-encode).
+        #
+        # Input-side resilience:
+        #   * ``-rw_timeout 15s`` kills the socket if the upstream
+        #     stops sending bytes (prevents a silent hang on the
+        #     ffmpeg child that the outer wall-deadline would only
+        #     catch at programme end).
+        #   * ``-reconnect_on_network_error`` and
+        #     ``-reconnect_on_http_error 4xx,5xx`` make ffmpeg retry
+        #     fragment fetches internally instead of returning EOF
+        #     on the first HLS blip. When those fail, the outer
+        #     loop's segment retry takes over.
         command = [
             self._ffmpeg,
             "-nostdin",
@@ -409,12 +427,18 @@ class RecordingManager:
             "warning",
             "-user_agent",
             "VLC/3.0.20 LibVLC/3.0.20",
+            "-rw_timeout",
+            "15000000",
             "-reconnect",
             "1",
             "-reconnect_streamed",
             "1",
+            "-reconnect_on_network_error",
+            "1",
+            "-reconnect_on_http_error",
+            "4xx,5xx",
             "-reconnect_delay_max",
-            "5",
+            "10",
             "-i",
             upstream_url,
             "-t",
@@ -436,11 +460,20 @@ class RecordingManager:
             str(out_path),
         ]
 
+        logger.info("ffmpeg start segment=%s duration=%ds", segment_name, duration)
         process = await asyncio.create_subprocess_exec(
             *command,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
+        )
+
+        # Stall watchdog: if the output file stops growing for
+        # ``_STALL_WATCHDOG_SECONDS`` we assume the upstream went
+        # silent and terminate ffmpeg so the retry loop can spawn
+        # a fresh segment instead of waiting for the wall deadline.
+        stall_task = asyncio.create_task(
+            self._watch_stall(process, out_path, segment_name)
         )
 
         # Wall-clock deadline: ffmpeg's ``-t`` is stream-time based, so a
@@ -483,9 +516,56 @@ class RecordingManager:
             with contextlib.suppress(asyncio.TimeoutError, Exception):
                 await asyncio.wait_for(process.wait(), timeout=5)
             raise
+        finally:
+            stall_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await stall_task
 
         returncode = process.returncode if process.returncode is not None else -1
         return err, returncode, hit_wall_deadline
+
+    async def _watch_stall(
+        self,
+        process: asyncio.subprocess.Process,
+        out_path: Path,
+        segment_name: str,
+    ) -> None:
+        """Terminate the ffmpeg child if its output file stops growing.
+
+        Polls ``out_path`` every few seconds. When the file hasn't
+        grown for ``_STALL_WATCHDOG_SECONDS`` we SIGTERM the child so
+        the outer loop can spin up a fresh segment. Cancelling this
+        task (normal path when ffmpeg exits on its own) silently
+        exits via ``CancelledError``.
+        """
+        last_size = -1
+        last_growth = time.monotonic()
+        # Grace period at start: ffmpeg needs time to open input
+        # (DNS, TLS, HLS playlist fetch) before writing the first
+        # bytes. Give it ``_STALL_WATCHDOG_SECONDS`` of pure startup.
+        try:
+            while process.returncode is None:
+                await asyncio.sleep(2)
+                try:
+                    size = out_path.stat().st_size
+                except OSError:
+                    size = 0
+                if size > last_size:
+                    last_size = size
+                    last_growth = time.monotonic()
+                    continue
+                if time.monotonic() - last_growth >= _STALL_WATCHDOG_SECONDS:
+                    logger.warning(
+                        "stall watchdog: %s not growing for %.0fs (size=%d); SIGTERM",
+                        segment_name,
+                        _STALL_WATCHDOG_SECONDS,
+                        size,
+                    )
+                    with contextlib.suppress(ProcessLookupError):
+                        process.terminate()
+                    return
+        except asyncio.CancelledError:
+            raise
 
     async def _run(
         self,
@@ -549,6 +629,26 @@ class RecordingManager:
                 window_open = stop_dt is not None and (stop_dt - now).total_seconds() > 30
                 seg_path = self._file_path(segment_name)
                 seg_size = seg_path.stat().st_size if seg_path.exists() else 0
+                logger.info(
+                    "segment exit rec=%s seg=%s rc=%d bytes=%d "
+                    "reached_end=%s window_open=%s wall=%s",
+                    rec_id,
+                    segment_name,
+                    returncode,
+                    seg_size,
+                    reached_end,
+                    window_open,
+                    hit_wall_deadline,
+                )
+                if returncode != 0 and err:
+                    # Preserve the last 400 chars so we can diagnose
+                    # upstream 5xx or codec rejections from journalctl.
+                    logger.warning(
+                        "ffmpeg stderr rec=%s seg=%s: %s",
+                        rec_id,
+                        segment_name,
+                        err.decode("utf-8", "ignore").strip()[-400:],
+                    )
 
                 if hit_wall_deadline:
                     if self._parts_of(entry) and self._total_size(entry) > 0:
@@ -679,6 +779,93 @@ class RecordingManager:
             async with self._lock:
                 self._tasks.pop(rec_id, None)
 
+    async def _finalize_single_part(self, rec_id: str, source_name: str) -> str:
+        """Produce a progressive, non-fragmented MP4 for fastest start.
+
+        The capture-time MP4 is fragmented (``+frag_keyframe
+        +empty_moov +default_base_moof``) so a SIGTERM during live
+        recording can't corrupt it. Finalised recordings, on the
+        other hand, play fastest when they're regular MP4 with one
+        moov at the head — no moof chain for the browser to walk.
+
+        Strategy: remux to a temp file with ``-c copy -movflags
+        +faststart`` and atomic-rename over the original. On any
+        failure we keep the original file (it still plays, just
+        slower to start). Returns the final filename on success, or
+        ``source_name`` if the remux was skipped or failed.
+        """
+        src_path = self._file_path(source_name)
+        if not src_path.exists() or src_path.stat().st_size == 0:
+            return source_name
+
+        # Keep .mp4 captures under their original name (stable URLs
+        # in the archive JSON) and only swap the bytes beneath.
+        # Legacy .mkv sources end up as ``<rec_id>.mp4``.
+        final_name = source_name if source_name.lower().endswith(".mp4") else f"{rec_id}.mp4"
+        tmp_path = self._file_path(f".{rec_id}.final.mp4")
+
+        # Two-pass: stream-copy first (works for our capture), then
+        # fall back to audio re-encode if the source has an MP4-
+        # hostile audio codec. Dropping the output between attempts
+        # prevents a partial from masquerading as a valid remux.
+        for codec_args in (["-c", "copy"], ["-c:v", "copy", "-c:a", "aac", "-b:a", "160k"]):
+            cmd = [
+                self._ffmpeg,
+                "-nostdin",
+                "-hide_banner",
+                "-loglevel",
+                "warning",
+                "-i",
+                str(src_path),
+                "-map",
+                "0",
+                *codec_args,
+                "-movflags",
+                "+faststart",
+                "-y",
+                str(tmp_path),
+            ]
+            err: bytes = b""
+            try:
+                process = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                )
+                _, err = await process.communicate()
+            except (OSError, FileNotFoundError) as exc:
+                logger.warning("finalize-mp4 spawn failed rec=%s: %s", rec_id, exc)
+                with contextlib.suppress(OSError):
+                    tmp_path.unlink()
+                return source_name
+            if process.returncode == 0 and tmp_path.exists() and tmp_path.stat().st_size > 0:
+                final_path = self._file_path(final_name)
+                try:
+                    tmp_path.replace(final_path)
+                except OSError as exc:
+                    logger.warning("finalize-mp4 rename failed rec=%s: %s", rec_id, exc)
+                    with contextlib.suppress(OSError):
+                        tmp_path.unlink()
+                    return source_name
+                # Drop the now-superseded source if we renamed under a
+                # different name (legacy MKV path). For MP4 sources the
+                # rename above already overwrote it.
+                if final_name != source_name:
+                    with contextlib.suppress(OSError):
+                        self._file_path(source_name).unlink()
+                return final_name
+            with contextlib.suppress(OSError):
+                tmp_path.unlink()
+            logger.warning(
+                "finalize-mp4 attempt failed rec=%s codecs=%s rc=%s stderr=%s",
+                rec_id,
+                codec_args,
+                process.returncode,
+                err.decode("utf-8", "ignore").strip()[-200:],
+            )
+        return source_name
+
     async def _remux_to_mp4(self, rec_id: str, mkv_name: str) -> str:
         """Produce an MP4 copy of the finalised MKV for mobile playback.
 
@@ -763,21 +950,29 @@ class RecordingManager:
             return
 
         if len(parts) == 1:
-            size = self._file_path(parts[0]).stat().st_size
-            duration = await self._total_duration(replace(entry, parts=parts))
-            # New captures are already MP4; remux only runs for legacy
-            # MKV segments (recorded before the direct-to-MP4 switch).
-            is_mkv = parts[0].lower().endswith(".mkv")
-            mp4_name = await self._remux_to_mp4(rec_id, parts[0]) if is_mkv else parts[0]
+            only = parts[0]
+            # Finalise single-part captures into a standard MP4 with
+            # moov-at-head. The live capture uses fragmented MP4
+            # (empty_moov + moof) so SIGTERM can't corrupt the file —
+            # but browsers start playback noticeably faster against a
+            # non-fragmented ``+faststart`` MP4. The remux is -c copy
+            # so the CPU cost is close to disk throughput.
+            # Legacy MKV captures (pre-MP4-migration) go through the
+            # same helper which already strips the fragmented flags.
+            finalised = await self._finalize_single_part(rec_id, only)
+            final_name = finalised or only
+            file_path = self._file_path(final_name)
+            size = file_path.stat().st_size if file_path.exists() else 0
+            duration = await self._probe_duration(file_path)
             self._save(
                 replace(
                     entry,
                     status="done",
-                    file=parts[0],
-                    parts=parts,
+                    file=final_name,
+                    parts=[final_name],
                     bytes=size,
                     duration_seconds=duration,
-                    mp4_file=mp4_name,
+                    mp4_file=final_name if final_name.lower().endswith(".mp4") else "",
                     error="",
                 )
             )
