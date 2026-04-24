@@ -25,6 +25,8 @@ from server.ai.client import AIConfig, get_client
 from server.ai.context import (
     build_main_schedule,
     channels_mentioned,
+    combine_windows,
+    detect_date_window,
     detect_time_of_day,
     drop_placeholder_slots,
     narrow_by_programme_content,
@@ -347,19 +349,24 @@ def build_router(state: Any) -> APIRouter:  # noqa: ANN401 — state is the main
             (m.content for m in reversed(body.messages) if m.role == "user"),
             "",
         )
-        # Detect a time-of-day cue in the user's question ("на вечер",
-        # "утром", "ночью"). When present we widen the EPG window so we
-        # don't truncate the asked slice of the day — e.g. a query at
-        # 10:00 about "вечером" needs EPG through 24:00, well past the
-        # default 8h horizon — and later narrow programmes to exactly
-        # that window so the model can only recommend from it.
+        # Detect time-of-day and date cues in the user's question ("на
+        # вечер", "утром", "в субботу", "на выходных", "завтра"). When
+        # present we widen the EPG window so we don't truncate the asked
+        # slice of the week — e.g. "на выходных" asked on Thursday needs
+        # EPG through Sunday evening, well past the default 8h horizon —
+        # and later narrow programmes to exactly that window so the model
+        # can only recommend from it. When both a date and time-of-day are
+        # given ("вечером в субботу"), they're intersected.
+        now_utc = datetime.now(UTC)
         tod_label = None if body.deep_search else detect_time_of_day(last_user_msg)
-        tod_window: tuple[datetime, datetime] | None = None
-        if tod_label is not None:
-            window_start, window_stop = resolve_tod_window(tod_label, datetime.now(UTC))
-            hours_needed = (window_stop - datetime.now(UTC)).total_seconds() / 3600
-            future_hours = max(8, min(30, int(hours_needed) + 2))
-            tod_window = (window_start, window_stop)
+        date_window = (
+            None if body.deep_search else detect_date_window(last_user_msg, now_utc)
+        )
+        tod_raw = resolve_tod_window(tod_label, now_utc) if tod_label else None
+        scope_window = combine_windows(date_window, tod_raw)
+        if scope_window is not None:
+            hours_needed = (scope_window[1] - now_utc).total_seconds() / 3600
+            future_hours = max(8, min(180, int(hours_needed) + 2))
         elif body.deep_search:
             future_hours = 168
         else:
@@ -396,12 +403,13 @@ def build_router(state: Any) -> APIRouter:  # noqa: ANN401 — state is the main
         schedules_without_placeholders = drop_placeholder_slots(schedules)
         if schedules_without_placeholders:
             schedules = schedules_without_placeholders
-        # Time-of-day narrow: strip programmes outside the asked window
-        # so the model can't reach for an earlier/later slot.
-        if tod_window is not None:
-            narrowed_tod = narrow_by_time_window(schedules, *tod_window)
-            if narrowed_tod:
-                schedules = narrowed_tod
+        # Date / time-of-day narrow: strip programmes outside the asked
+        # window so the model can't reach for an earlier/later day or
+        # slot. Covers "на выходных", "в субботу", "завтра вечером".
+        if scope_window is not None:
+            narrowed_scope = narrow_by_time_window(schedules, *scope_window)
+            if narrowed_scope:
+                schedules = narrowed_scope
         history = [m.model_dump() for m in body.messages]
 
         # Tool executor bound to this request's channel map.
@@ -1461,18 +1469,30 @@ async def _resolve_poster_for_title(
     Returns an empty string on any failure so callers can just plug it in.
     """
     title_clean = (title or "").strip()
-    latin_hint = (poster_keywords or "").strip()
-    has_useful_latin = (
-        bool(latin_hint)
-        and latin_hint.lower() != title_clean.lower()
-        and any(c.isascii() and c.isalpha() for c in latin_hint)
+    hint = (poster_keywords or "").strip()
+    # Accept the model's keyword hint whenever it's meaningfully richer
+    # than the bare title, regardless of alphabet. The old heuristic
+    # required at least one Latin letter, which worked for Hollywood
+    # ("Inception 2010 film") but silently rejected the Cyrillic hints
+    # the digest prompt explicitly asks for on Russian films ("Красные
+    # огни 2024 триллер Хабенский фильм"). That pushed Google onto the
+    # bare "Красные огни" and landed on generic red-light photos.
+    # "Meaningfully richer" = either adds a year token, OR carries at
+    # least 4 tokens AND more content than the title alone.
+    title_word_count = _word_count(title_clean)
+    hint_word_count = _word_count(hint)
+    hint_has_year = bool(re.search(r"\b(?:19|20)\d{2}\b", hint))
+    hint_is_useful = (
+        bool(hint)
+        and hint.lower() != title_clean.lower()
+        and (hint_has_year or hint_word_count >= max(4, title_word_count + 2))
     )
-    if has_useful_latin:
-        primary = latin_hint
+    if hint_is_useful:
+        primary = hint
         fallback = title_clean
     else:
         primary = title_clean
-        fallback = latin_hint if latin_hint and latin_hint != title_clean else ""
+        fallback = hint if hint and hint != title_clean else ""
     # Enrich thin queries via gpt-4.1-mini before handing to Google
     # Images. The digest prompt already asks for rich keywords, but a
     # model slip (empty / 2-word keywords) would otherwise send bare
@@ -1508,7 +1528,7 @@ async def _resolve_poster_for_title(
         proxied = f"/api/ai/poster-image?src={quote(hit.url, safe='')}" if hit else ""
         source = hit.source if hit else "none"
         print(
-            f"[poster] title='{title_clean[:60]}' hint='{latin_hint[:60]}' "
+            f"[poster] title='{title_clean[:60]}' hint='{hint[:60]}' "
             f"-> {'OK' if proxied else 'MISS'} ({source})",
             flush=True,
         )
@@ -1816,6 +1836,23 @@ async def _generate_digest_bg(
                 print(
                     f"[digest-bg] theme=sport post-filter dropped "
                     f"{len(result.items) - len(filtered_items)} fiction items",
+                    flush=True,
+                )
+                from server.ai.digest import Digest as _Digest
+
+                result = _Digest(
+                    date=result.date,
+                    theme=result.theme,
+                    lang=result.lang,
+                    generated_at=result.generated_at,
+                    items=filtered_items,
+                )
+        elif theme == "cinema":
+            filtered_items = _drop_series_digest_items(result.items)
+            if len(filtered_items) != len(result.items):
+                print(
+                    f"[digest-bg] theme=cinema post-filter dropped "
+                    f"{len(result.items) - len(filtered_items)} series items",
                     flush=True,
                 )
                 from server.ai.digest import Digest as _Digest
@@ -2178,6 +2215,28 @@ _SERIES_MARKER_RE = re.compile(
     r")",
     re.IGNORECASE,
 )
+# Series signals that only appear in the programme's description. Titles
+# like "Ментовские войны — Тени прошлого" have no episode markers, but
+# the EPG description is explicit ("Многосерийная драма.", "Российский
+# сериал.", "Эпизод 12 из 24"). Catching these keeps series out of
+# "Главное сегодня → Кино" even when the title reads like a feature film.
+_SERIES_DESCRIPTION_RE = re.compile(
+    r"("
+    r"\bсериал\S*"
+    r"|\bтелесериал\S*"
+    r"|\bмногосерийн\S*"
+    r"|\bминисериал\S*"
+    r"|\bмини[-\s]сериал\S*"
+    r"|\bэпизод\S*"
+    r"|\bсезон\S*"
+    r"|\b\d+[-\s]серийн\S*"
+    r"|\btv\s+series\b"
+    r"|\bmini[-\s]series\b"
+    r"|\bepisode\s+\d+"
+    r"|\bseason\s+\d+"
+    r")",
+    re.IGNORECASE,
+)
 # Sport / broadcast markers that occasionally slip into cinema slots on
 # generalist channels ("5-й этап", "Гран-при", "трансляция"). Combined
 # with the channel-name filter this catches e.g. НАСКАР on ТНТ.
@@ -2196,8 +2255,14 @@ def _exclude_non_cinema(schedules: list) -> list:
 
     The keyword-inclusion filter alone can't catch an episode of «Интерны»
     whose description mentions «комедия» — it matches the cinema theme by
-    word but is still a series. A negative regex applied AFTER the
-    positive filter makes the cinema set cleanly feature-film.
+    word but is still a series. Two negative regexes applied AFTER the
+    positive filter make the cinema set cleanly feature-film: one checks
+    the title for numeric episode markers ("с.57", "2 сезон"), the other
+    scans the description for named-series signals ("сериал",
+    "многосерийный", "телесериал", "episode 12"). Without the
+    description check, generic episode titles like "Ментовские войны —
+    Тени прошлого" slip through because the title itself reads like a
+    film.
     """
     from server.ai.context import ChannelSchedule  # local import, tight loop
 
@@ -2206,7 +2271,10 @@ def _exclude_non_cinema(schedules: list) -> list:
         matching = tuple(
             p
             for p in sch.programmes
-            if not _SERIES_MARKER_RE.search(p.title) and not _SPORT_BROADCAST_RE.search(p.title)
+            if not _SERIES_MARKER_RE.search(p.title)
+            and not _SPORT_BROADCAST_RE.search(p.title)
+            and not _SERIES_DESCRIPTION_RE.search(p.description)
+            and not _SERIES_MARKER_RE.search(p.description)
         )
         if matching:
             clean.append(
@@ -2305,6 +2373,21 @@ def _drop_fictional_digest_items(items: tuple) -> tuple:
     pick an item the pre-filter missed. Returns the filtered tuple.
     """
     return tuple(i for i in items if not _is_fictional_entry(i.title, i.blurb))
+
+
+def _drop_series_digest_items(items: tuple) -> tuple:
+    """Post-filter for cinema: drop digest entries that are scripted
+    series. Belt-and-braces backstop for ``_exclude_non_cinema`` — if a
+    series whose EPG description lacked the "сериал" token still slipped
+    through and the model wrote a series-sounding blurb ("в новом
+    эпизоде"), this strips it before the digest is cached.
+    """
+    return tuple(
+        i
+        for i in items
+        if not _SERIES_MARKER_RE.search(i.title)
+        and not _SERIES_DESCRIPTION_RE.search(i.blurb)
+    )
 
 
 def _narrow_by_keywords(schedules: list, keywords: list[str]) -> list:

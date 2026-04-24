@@ -132,6 +132,230 @@ def resolve_tod_window(label: TimeOfDay, now_utc: datetime) -> tuple[datetime, d
     return window_start, window_stop
 
 
+# Day-of-week labels — Monday=0 to match `datetime.weekday()`.
+# "weekend" stays special because it spans two days (Sat+Sun).
+DayOfWeek = Literal[
+    "mon", "tue", "wed", "thu", "fri", "sat", "sun", "weekend"
+]
+
+# Phrases → day-of-week label. Ordered so longer/more-specific phrases win
+# ("по субботам" before bare "суббота"). Kept inclusive for case/stemming:
+# "в субботу", "субботний вечер", "на субботу" all land on Saturday.
+_DOW_PATTERNS: tuple[tuple[DayOfWeek, tuple[str, ...]], ...] = (
+    (
+        "weekend",
+        (
+            "на выходных",
+            "в выходные",
+            "на выходные",
+            "по выходным",
+            "выходные",
+            "выходных",
+            "this weekend",
+            "on the weekend",
+            "weekends",
+            "weekend",
+        ),
+    ),
+    (
+        "sat",
+        (
+            "в субботу",
+            "на субботу",
+            "по субботам",
+            "субботу",
+            "субботний",
+            "субботним",
+            "субботнего",
+            "суббот",
+            "saturday",
+            "sat ",
+        ),
+    ),
+    (
+        "sun",
+        (
+            "в воскресенье",
+            "на воскресенье",
+            "по воскресеньям",
+            "воскресенье",
+            "воскресенья",
+            "воскресный",
+            "воскресным",
+            "воскресенья",
+            "sunday",
+            "sun ",
+        ),
+    ),
+    (
+        "mon",
+        (
+            "в понедельник",
+            "на понедельник",
+            "понедельник",
+            "понедельника",
+            "monday",
+            "mon ",
+        ),
+    ),
+    (
+        "tue",
+        (
+            "во вторник",
+            "на вторник",
+            "вторник",
+            "вторника",
+            "tuesday",
+            "tue ",
+        ),
+    ),
+    (
+        "wed",
+        (
+            "в среду",
+            "на среду",
+            "среду",
+            "в среду",
+            "среда",
+            "wednesday",
+            "wed ",
+        ),
+    ),
+    (
+        "thu",
+        (
+            "в четверг",
+            "на четверг",
+            "четверг",
+            "четверга",
+            "thursday",
+            "thu ",
+        ),
+    ),
+    (
+        "fri",
+        (
+            "в пятницу",
+            "на пятницу",
+            "по пятницам",
+            "пятницу",
+            "пятница",
+            "пятницы",
+            "пятничный",
+            "friday",
+            "fri ",
+        ),
+    ),
+)
+
+# Relative-date phrases → day offset from "today". Checked before day-of-week
+# so "послезавтра" always wins over an accidental DOW collision.
+_RELATIVE_DAY_PATTERNS: tuple[tuple[int, tuple[str, ...]], ...] = (
+    (2, ("послезавтра", "day after tomorrow")),
+    (1, ("завтра", "на завтра", "tomorrow")),
+    (0, ("сегодня", "today", "tonight")),
+)
+
+
+def detect_date_window(
+    text: str, now_utc: datetime
+) -> tuple[datetime, datetime] | None:
+    """Return the date window implied by the user's message, or ``None``.
+
+    Recognises "выходные/weekend", explicit weekdays ("в субботу",
+    "saturday"), and relative phrases ("завтра", "послезавтра", "сегодня").
+    The window is aligned to the user's local clock (Europe/Moscow) and
+    expressed in the same tz as ``resolve_tod_window`` so the two can be
+    combined.
+
+    Precedence: weekend > explicit weekday > relative day. When the detected
+    day is already in the past (e.g. user says "суббота" on Sunday evening)
+    we target NEXT week's occurrence, not a historical one.
+    """
+    if not text:
+        return None
+    low = text.lower()
+    now_local = now_utc.astimezone(_USER_LOCAL_TZ)
+    today_local = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    # 1. Day-of-week phrases (weekend takes precedence via ordering above).
+    for label, phrases in _DOW_PATTERNS:
+        if any(phrase in low for phrase in phrases):
+            if label == "weekend":
+                # Saturday 00:00 through Monday 00:00 (local).
+                days_ahead = (5 - today_local.weekday()) % 7
+                # If today IS Saturday or Sunday, start from today — don't
+                # roll forward a whole week.
+                if today_local.weekday() in (5, 6):
+                    days_ahead = 0
+                window_start = today_local + timedelta(days=days_ahead)
+                window_stop = window_start + timedelta(
+                    days=2 if today_local.weekday() != 6 else 1
+                )
+            else:
+                target_dow = ("mon", "tue", "wed", "thu", "fri", "sat", "sun").index(
+                    label
+                )
+                days_ahead = (target_dow - today_local.weekday()) % 7
+                # days_ahead == 0 means the user said "в субботу" and it IS
+                # Saturday — serve today's remaining slots rather than next
+                # week.
+                window_start = today_local + timedelta(days=days_ahead)
+                window_stop = window_start + timedelta(days=1)
+            # If the chosen day is today but the day already ended, bump
+            # forward — happens if user types "сегодня" at 23:59.
+            if window_stop <= now_local:
+                window_start += timedelta(days=7)
+                window_stop += timedelta(days=7)
+            # Never include past-aired programmes on "today".
+            if window_start < now_local:
+                window_start = now_local
+            return window_start, window_stop
+
+    # 2. Relative day phrases.
+    for offset, phrases in _RELATIVE_DAY_PATTERNS:
+        if any(phrase in low for phrase in phrases):
+            window_start = today_local + timedelta(days=offset)
+            window_stop = window_start + timedelta(days=1)
+            if window_start < now_local:
+                window_start = now_local
+            return window_start, window_stop
+
+    return None
+
+
+def combine_windows(
+    date_window: tuple[datetime, datetime] | None,
+    tod_window: tuple[datetime, datetime] | None,
+) -> tuple[datetime, datetime] | None:
+    """Intersect a date and time-of-day window into one range.
+
+    "вечер в субботу" asks for Saturday 18:00–24:00. The date window is
+    Sat 00:00–Sun 00:00; the time-of-day window (computed against today)
+    is 18:00–24:00 on whatever day it resolves to. This projects the
+    time-of-day's start/stop hours onto the date window's day.
+    """
+    if date_window is None:
+        return tod_window
+    if tod_window is None:
+        return date_window
+    date_start, date_stop = date_window
+    tod_start, tod_stop = tod_window
+    duration = tod_stop - tod_start
+    # Project the time-of-day onto the first day of the date window.
+    projected_start = date_start.replace(
+        hour=tod_start.hour, minute=tod_start.minute, second=0, microsecond=0
+    )
+    projected_stop = projected_start + duration
+    # Clip to the date window.
+    projected_start = max(projected_start, date_start)
+    projected_stop = min(projected_stop, date_stop)
+    if projected_stop <= projected_start:
+        # Incompatible combination — fall back to the wider date window.
+        return date_window
+    return projected_start, projected_stop
+
+
 def _normalize_for_match(text: str) -> str:
     """Lowercase + strip decorative bits we don't want to factor into matches.
 
